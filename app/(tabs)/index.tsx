@@ -10,7 +10,7 @@ import {
   StatusBar,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Feather } from '@expo/vector-icons';
 import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
@@ -29,33 +29,25 @@ import { CalendarGrid } from '@/components/CalendarGrid';
 const SCREEN_WIDTH = Math.min(Dimensions.get('window').width, 390);
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
-const BLOB_W = Math.round(SCREEN_WIDTH * 0.84);
+const BLOB_W = Math.round(SCREEN_WIDTH * 0.84); // natural blob width
+const BLOB_ASPECT = 477 / 277;                   // viewBox height/width ratio
 
-const PHOTO_W = Math.round(SCREEN_WIDTH * 0.82);
-const PHOTO_H = Math.round(PHOTO_W * (4 / 3));
 const PHOTO_R = 20;
+const PHOTO_TOP_GAP = 8;   // gap between header and photo top
+const PHOTO_BOT_GAP = 14;  // gap between photo bottom and panel
 
-const HEADER_H_EST = 62;
-const LIME_PEEK = 22;
+// When no post yet, only show handle bar + streak row (no calendar header)
+const STREAK_PEEK = 96;
 
 // Sliding panel: diagonal gradient, yellow top-left → pink bottom-right
 const PANEL_COLORS = ['#fdf5b9', '#f0c8e8', '#e9b3ee'] as const;
 
-// 6-lobe organic blob: two top bumps with notch, wide sides, two bottom bumps with notch
-// Viewbox 200×350 approximates the portrait aspect ratio of the blob area
-const BLOB_PATH =
-  'M 55,32 ' +
-  'C 80,5 120,5 155,32 ' +        // top notch between upper-left and upper-right bumps
-  'C 178,58 195,120 192,175 ' +   // upper-right → right side bulge
-  'C 190,232 175,285 148,320 ' +  // right bulge → lower-right bump
-  'C 128,300 72,300 52,320 ' +    // bottom notch between lower bumps (control pts pull inward)
-  'C 25,298 5,230 8,175 ' +       // lower-left bump → left side bulge
-  'C 10,118 22,58 55,32 Z';       // left bulge → back to upper-left bump
+const BLOB_PATH = 'M30.5054 40.5625C-5.49458 72.5625 17.5054 101.562 17.5054 101.562C17.5054 101.562 29.5174 111.958 30.5054 125.562C33.2106 162.812 6.50542 152.562 0.505417 196.562C8.50541 246.562 34.9904 247.443 44.5054 274.563C56.5302 308.835 25.5054 334.563 17.5054 372.563C17.5054 412.563 29.5676 442.268 65.5054 453.563C127.505 473.048 125.505 414.461 158.505 416.562C189.505 436.562 175.505 475.563 228.505 475.563C263.505 467.562 276.505 411.563 276.505 372.563C276.505 329.269 237.723 317.322 244.505 274.563C249.416 243.605 274.457 189.931 263.505 160.563C256.324 141.304 256.445 142.293 244.505 125.562C215.069 84.3156 311.505 73.5625 238.505 8.56246C160.505 -21.4375 168.505 40.5625 107.505 59.5625C82.9587 67.2082 71.5054 20.5625 30.5054 40.5625Z';
 
 function BlobMirror({ width, height, children }: { width: number; height: number; children?: React.ReactNode }) {
   return (
     <View style={{ width, height }}>
-      <Svg width={width} height={height} viewBox="0 0 200 350" preserveAspectRatio="none" style={StyleSheet.absoluteFill}>
+      <Svg width={width} height={height} viewBox="0 0 277 477" preserveAspectRatio="none" style={StyleSheet.absoluteFill}>
         <Defs>
           <SvgGradient id="bg" x1="20%" y1="0%" x2="80%" y2="100%">
             <Stop offset="0%" stopColor="#CCE0EE" />
@@ -73,7 +65,7 @@ function BlobMirror({ width, height, children }: { width: number; height: number
 }
 
 function postToEntry(p: Post) {
-  return { date: p.date, photoUri: p.photo_url };
+  return { date: p.date, photoUri: p.photo_url, createdAt: new Date(p.created_at).getTime() };
 }
 
 export default function JournalHome() {
@@ -134,9 +126,30 @@ export default function JournalHome() {
   const goToAdd = () => router.push({ pathname: '/add' as any, params: { date: todayStr } });
   const goToTodayEntry = () => router.push({ pathname: '/entry/[date]' as any, params: { date: todayStr } });
 
-  const spacerH = containerH > 0 ? containerH - LIME_PEEK : SCREEN_HEIGHT - LIME_PEEK;
-  const blobAreaH = spacerH - HEADER_H_EST;
-  const BLOB_H = Math.round(blobAreaH * 0.88);
+  const insets = useSafeAreaInsets();
+  const headerH = insets.top + 64;
+  // Photo: 3:4 portrait ratio, width-first. 78% screen width, height derived from that.
+  // Capped so panel always shows at least the streak row on short devices.
+  const photoW_target = Math.round(SCREEN_WIDTH * 0.78);
+  const photoH_target = Math.round(photoW_target * 4 / 3);
+  const photoH_max = containerH > 0
+    ? containerH - headerH - PHOTO_TOP_GAP - 190 - PHOTO_BOT_GAP
+    : photoH_target;
+  const photoH = (todayPost != null && containerH > 0)
+    ? Math.min(photoH_target, photoH_max)
+    : photoH_target;
+  const photoW = Math.round(photoH * 3 / 4);
+  // Panel starts right below the photo.
+  const panelPeek = todayPost != null && containerH > 0
+    ? containerH - headerH - PHOTO_TOP_GAP - photoH - PHOTO_BOT_GAP
+    : STREAK_PEEK;
+  const spacerH = containerH > 0 ? containerH - panelPeek : SCREEN_HEIGHT - panelPeek;
+  const blobAreaH = spacerH - headerH;
+  // Scale blob proportionally — never squish vertically
+  const naturalBlobH = Math.round(BLOB_W * BLOB_ASPECT);
+  const maxBlobH = Math.round(blobAreaH * 0.88);
+  const blobH = Math.min(naturalBlobH, maxBlobH);
+  const blobW = blobH < naturalBlobH ? Math.round(blobH / BLOB_ASPECT) : BLOB_W;
 
   const initials = (profile?.display_name ?? profile?.username ?? '?')[0].toUpperCase();
 
@@ -149,28 +162,28 @@ export default function JournalHome() {
 
       {/* Hero background — visual only, no interactions */}
       <View style={[styles.heroLayer, { height: spacerH }]} pointerEvents="none">
-        <View style={{ height: HEADER_H_EST }} />
-        <View style={styles.blobWrapper}>
+        <View style={{ height: headerH }} />
+        <View style={[styles.blobWrapper, !!todayPost && styles.blobWrapperPosted]}>
           {!session ? (
-            <BlobMirror width={BLOB_W} height={BLOB_H}>
+            <BlobMirror width={blobW} height={blobH}>
               <Text style={styles.blobTitle}>{'SIGN IN\nTO START'}</Text>
             </BlobMirror>
           ) : !todayPost ? (
-            <BlobMirror width={BLOB_W} height={BLOB_H}>
+            <BlobMirror width={blobW} height={blobH}>
               <View style={styles.cameraRing}>
                 <Feather name="camera" size={28} color="#0B0B0B" />
               </View>
               <Text style={styles.blobTitle}>{'ADD\nTODAY\'S\nLOOK'}</Text>
             </BlobMirror>
           ) : (
-            <View style={styles.photoTouchable}>
+            <View style={[styles.photoTouchable, { width: photoW, height: photoH }]}>
               <Image
                 source={{ uri: todayPost.photo_url }}
-                style={styles.photoImage}
+                style={[styles.photoImage, { width: photoW, height: photoH }]}
                 resizeMode="cover"
               />
               <LinearGradient
-                colors={['transparent', 'rgba(11,11,11,0.72)']}
+                colors={['transparent', 'rgba(11,11,11,0.82)']}
                 style={styles.photoOverlay}
               >
                 <Text style={styles.photoDate}>{formatDate(todayStr)}</Text>
@@ -180,22 +193,36 @@ export default function JournalHome() {
                     <Feather name="check" size={11} color="#0B0B0B" />
                   </View>
                 </View>
+                {!!todayPost.caption && (
+                  <Text style={styles.overlayCaptionText} numberOfLines={2}>
+                    {todayPost.caption}
+                  </Text>
+                )}
+                {todayPost.tags && todayPost.tags.length > 0 && (
+                  <View style={styles.overlayTagsRow}>
+                    {todayPost.tags.slice(0, 5).map((tag, i) => (
+                      <View key={i} style={styles.overlayTagChip}>
+                        <Text style={styles.overlayTagText}>#{tag}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </LinearGradient>
             </View>
           )}
         </View>
       </View>
 
-      {/* Scroll overlay */}
+      {/* Scroll overlay — starts below header so panel can never cover it */}
       <ScrollView
-        style={StyleSheet.absoluteFill}
+        style={[StyleSheet.absoluteFill, { top: headerH }]}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         scrollsToTop={false}
         onScroll={e => setScrollY(e.nativeEvent.contentOffset.y)}
         scrollEventThrottle={16}
       >
-        <View style={{ height: spacerH }} pointerEvents="none" />
+        <View style={{ height: spacerH - headerH }} pointerEvents="none" />
 
         <LinearGradient
           colors={PANEL_COLORS}
@@ -242,7 +269,7 @@ export default function JournalHome() {
             <Text style={styles.summaryText}>
               {thisMonthCount === 0
                 ? 'no looks logged yet this month'
-                : `${thisMonthCount} look${thisMonthCount !== 1 ? 's' : ''} this month`}
+                : <>{thisMonthCount} look{thisMonthCount !== 1 ? 's' : ''} this month <Text style={styles.summaryEmoji}>🎉</Text></>}
             </Text>
           </View>
         </LinearGradient>
@@ -254,32 +281,32 @@ export default function JournalHome() {
         style={[styles.heroLayer, { height: spacerH }]}
         pointerEvents={scrollY < 50 ? 'box-none' : 'none'}
       >
-        <View style={{ height: HEADER_H_EST }} />
-        <View style={styles.blobWrapper}>
+        <View style={{ height: headerH }} />
+        <View style={[styles.blobWrapper, !!todayPost && styles.blobWrapperPosted]}>
           {!session ? (
             <TouchableOpacity
               onPress={() => router.push('/auth' as any)}
               activeOpacity={0.86}
-              style={[styles.blobTouchable, { height: BLOB_H }]}
+              style={[styles.blobTouchable, { width: blobW, height: blobH }]}
             />
           ) : !todayPost ? (
             <TouchableOpacity
               onPress={goToAdd}
               activeOpacity={0.86}
-              style={[styles.blobTouchable, { height: BLOB_H }]}
+              style={[styles.blobTouchable, { width: blobW, height: blobH }]}
             />
           ) : (
             <TouchableOpacity
               onPress={goToTodayEntry}
               activeOpacity={0.9}
-              style={styles.photoTouchable}
+              style={[styles.photoTouchable, { width: photoW, height: photoH }]}
             />
           )}
         </View>
       </View>
 
       {/* Header rendered last = above scroll, touches reach it */}
-      <View style={styles.header} pointerEvents="box-none">
+      <View style={[styles.header, { paddingTop: insets.top + 2 }]} pointerEvents="box-none">
         <Text style={styles.wordmark}>muse</Text>
         <TouchableOpacity
           style={styles.avatarBtn}
@@ -325,6 +352,7 @@ const styles = StyleSheet.create({
   avatarInitials: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.primary },
 
   blobWrapper: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  blobWrapperPosted: { justifyContent: 'flex-start', paddingTop: PHOTO_TOP_GAP },
   blobTouchable: { width: BLOB_W },
   blobContent: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14 },
   cameraRing: {
@@ -334,22 +362,8 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderColor: 'rgba(11,11,11,0.22)',
   },
   blobTitle: {
-    fontSize: 30, fontWeight: '900', color: '#0B0B0B',
-    textAlign: 'center', textTransform: 'uppercase', letterSpacing: -1, lineHeight: 32,
-  },
-
-  photoTouchable: { width: PHOTO_W, height: PHOTO_H, borderRadius: PHOTO_R, overflow: 'hidden' },
-  photoImage: { width: PHOTO_W, height: PHOTO_H },
-  photoOverlay: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    paddingHorizontal: 20, paddingBottom: 24, paddingTop: 60,
-  },
-  photoDate: { fontSize: Theme.font.xs, color: 'rgba(255,255,255,0.65)', marginBottom: 4 },
-  photoLoggedRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  photoLoggedText: { fontSize: Theme.font.md, fontWeight: '700', color: Theme.colors.white },
-  checkBadge: {
-    width: 20, height: 20, borderRadius: 10,
-    backgroundColor: Theme.colors.accent, alignItems: 'center', justifyContent: 'center',
+    fontSize: 26, fontWeight: '900', color: '#0B0B0B',
+    textAlign: 'center', textTransform: 'uppercase', letterSpacing: -0.5, lineHeight: 29,
   },
 
   limeCard: {
@@ -382,6 +396,33 @@ const styles = StyleSheet.create({
     fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.5,
   },
 
-  summary: { paddingHorizontal: 20, paddingTop: 18 },
-  summaryText: { fontSize: Theme.font.sm, color: Theme.colors.limeMuted },
+  summary: { paddingHorizontal: 20, paddingTop: 18, alignItems: 'center' },
+  summaryText: { fontSize: Theme.font.sm, color: Theme.colors.limeMuted, textAlign: 'center' },
+  summaryEmoji: { fontSize: Theme.font.sm + 2 },
+
+  // Hero photo (when today is posted — top-aligned, dynamic portrait)
+  photoTouchable: { borderRadius: PHOTO_R, overflow: 'hidden' },
+  photoImage: {},
+  photoOverlay: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    paddingHorizontal: 20, paddingBottom: 24, paddingTop: 60,
+  },
+  photoDate: { fontSize: Theme.font.xs, color: 'rgba(255,255,255,0.65)', marginBottom: 4 },
+  photoLoggedRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  photoLoggedText: { fontSize: Theme.font.md, fontWeight: '700', color: Theme.colors.white },
+  checkBadge: {
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: Theme.colors.accent, alignItems: 'center', justifyContent: 'center',
+  },
+  overlayCaptionText: {
+    fontSize: Theme.font.sm, color: 'rgba(255,255,255,0.82)',
+    fontStyle: 'italic', marginTop: 8, lineHeight: 18,
+  },
+  overlayTagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 8 },
+  overlayTagChip: {
+    paddingHorizontal: 9, paddingVertical: 3, borderRadius: 100,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  overlayTagText: { fontSize: 10, color: 'rgba(255,255,255,0.88)', fontWeight: '500' },
 });

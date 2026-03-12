@@ -9,6 +9,7 @@ import {
   Switch,
   TextInput,
   Alert,
+  Platform,
   ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -23,15 +24,13 @@ import {
   getMyCommunities,
   updateProfile,
   uploadAvatar,
-  createCommunity,
-  leaveCommunity,
   signOut,
+  deleteAccount,
   Community,
   Post,
   Profile,
 } from '@/utils/api';
 import { useAuth } from '@/utils/auth';
-import { formatShortDate } from '@/utils/dates';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -44,13 +43,6 @@ export default function ProfileScreen() {
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState('');
   const [savingName, setSavingName] = useState(false);
-
-  // New community form
-  const [showCommunityForm, setShowCommunityForm] = useState(false);
-  const [communityName, setCommunityName] = useState('');
-  const [communitySlug, setCommunitySlug] = useState('');
-  const [communityDesc, setCommunityDesc] = useState('');
-  const [creatingCommunity, setCreatingCommunity] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -120,48 +112,30 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleLeave = (community: Community) => {
-    Alert.alert(`leave ${community.name}?`, '', [
-      { text: 'cancel', style: 'cancel' },
-      {
-        text: 'leave',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await leaveCommunity(community.id);
-            setCommunities(cs => cs.filter(c => c.id !== community.id));
-          } catch {
-            Alert.alert('error', 'could not leave community');
-          }
-        },
-      },
-    ]);
-  };
-
-  const handleCreateCommunity = async () => {
-    if (!communityName.trim() || !communitySlug.trim()) return;
-    setCreatingCommunity(true);
-    try {
-      const c = await createCommunity({
-        name: communityName.trim(),
-        slug: communitySlug.trim().toLowerCase().replace(/\s+/g, '-'),
-        description: communityDesc.trim(),
-      });
-      setCommunities(cs => [c, ...cs]);
-      setCommunityName('');
-      setCommunitySlug('');
-      setCommunityDesc('');
-      setShowCommunityForm(false);
-    } catch (e: any) {
-      Alert.alert('error', e?.message ?? 'could not create community');
-    } finally {
-      setCreatingCommunity(false);
-    }
-  };
-
   const handleSignOut = async () => {
     await signOut();
     // AuthGate will redirect to /auth once session becomes null
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'delete account',
+      'this will permanently delete your account, all outfits, and profile data. this cannot be undone.',
+      [
+        { text: 'cancel', style: 'cancel' },
+        {
+          text: 'delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteAccount();
+            } catch (e: any) {
+              Alert.alert('error', e?.message ?? 'could not delete account');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const displayName = profile.display_name ?? profile.username;
@@ -224,21 +198,39 @@ export default function ProfileScreen() {
         <View style={styles.statsRow}>
           <View style={styles.stat}>
             <Text style={styles.statNum}>{posts.length}</Text>
-            <Text style={styles.statLabel}>posts</Text>
+            <Text style={styles.statLabel}>outfits</Text>
           </View>
           <View style={styles.statDivider} />
           <View style={styles.stat}>
+            <Text style={styles.statNum}>{profile.followers_count ?? 0}</Text>
+            <Text style={styles.statLabel}>followers</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.stat}>
+            <Text style={styles.statNum}>{profile.following_count ?? 0}</Text>
+            <Text style={styles.statLabel}>following</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <TouchableOpacity
+            style={styles.stat}
+            onPress={() => router.push('/communities' as any)}
+            hitSlop={8}
+          >
             <Text style={styles.statNum}>{communities.length}</Text>
             <Text style={styles.statLabel}>communities</Text>
-          </View>
+          </TouchableOpacity>
         </View>
 
         {/* Public toggle */}
         <View style={styles.section}>
           <View style={styles.row}>
-            <View>
-              <Text style={styles.rowLabel}>public profile</Text>
-              <Text style={styles.rowSub}>your posts appear in the social feed</Text>
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <Text style={styles.rowLabel}>{profile.is_public ? 'public profile' : 'private profile'}</Text>
+              <Text style={styles.rowSub}>
+                {profile.is_public
+                  ? 'your outfits are visible to everyone.'
+                  : 'only you can see your outfits.'}
+              </Text>
             </View>
             <Switch
               value={profile.is_public}
@@ -249,75 +241,10 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Communities */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>communities</Text>
-            <TouchableOpacity onPress={() => setShowCommunityForm(v => !v)}>
-              <Text style={styles.sectionAction}>+ create new</Text>
-            </TouchableOpacity>
-          </View>
-
-          {showCommunityForm && (
-            <View style={styles.communityForm}>
-              <TextInput
-                style={styles.formInput}
-                placeholder="community name"
-                placeholderTextColor={Theme.colors.disabled}
-                value={communityName}
-                onChangeText={v => {
-                  setCommunityName(v);
-                  setCommunitySlug(v.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''));
-                }}
-              />
-              <TextInput
-                style={styles.formInput}
-                placeholder="slug (e.g. vintage-fits)"
-                placeholderTextColor={Theme.colors.disabled}
-                value={communitySlug}
-                onChangeText={setCommunitySlug}
-                autoCapitalize="none"
-              />
-              <TextInput
-                style={[styles.formInput, { minHeight: 60 }]}
-                placeholder="description (optional)"
-                placeholderTextColor={Theme.colors.disabled}
-                value={communityDesc}
-                onChangeText={setCommunityDesc}
-                multiline
-              />
-              <TouchableOpacity
-                style={[styles.createBtn, creatingCommunity && { opacity: 0.5 }]}
-                onPress={handleCreateCommunity}
-                disabled={creatingCommunity}
-              >
-                {creatingCommunity
-                  ? <ActivityIndicator color={Theme.colors.background} />
-                  : <Text style={styles.createBtnText}>create community</Text>
-                }
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {communities.length === 0 ? (
-            <Text style={styles.emptyCommunities}>you haven't joined any communities yet.</Text>
-          ) : (
-            communities.map(c => (
-              <View key={c.id} style={styles.communityRow}>
-                <TouchableOpacity
-                  onPress={() => router.push({ pathname: '/community/[id]' as any, params: { id: c.id } })}
-                  style={{ flex: 1 }}
-                >
-                  <Text style={styles.communityName}>{c.name}</Text>
-                  {c.description ? <Text style={styles.communityDesc} numberOfLines={1}>{c.description}</Text> : null}
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => handleLeave(c)} hitSlop={8}>
-                  <Text style={styles.leaveText}>leave</Text>
-                </TouchableOpacity>
-              </View>
-            ))
-          )}
-        </View>
+        {/* Danger zone */}
+        <TouchableOpacity onPress={handleDeleteAccount} style={styles.deleteBtn} hitSlop={8}>
+          <Text style={styles.deleteBtnText}>delete account</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -390,33 +317,11 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
   },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sectionTitle: { fontSize: Theme.font.base, fontWeight: '700', color: Theme.colors.primary },
-  sectionAction: { fontSize: Theme.font.sm, color: Theme.colors.accent, fontWeight: '600' },
-
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   rowLabel: { fontSize: Theme.font.base, fontWeight: '600', color: Theme.colors.primary },
   rowSub: { fontSize: Theme.font.xs, color: Theme.colors.secondary, marginTop: 2 },
 
-  communityForm: { gap: 8 },
-  formInput: {
-    backgroundColor: Theme.colors.background, borderRadius: Theme.radius.md,
-    borderWidth: 1, borderColor: Theme.colors.border,
-    paddingHorizontal: 12, paddingVertical: 10,
-    fontSize: Theme.font.base, color: Theme.colors.primary,
-  },
-  createBtn: {
-    backgroundColor: Theme.colors.accent, borderRadius: Theme.radius.md,
-    paddingVertical: 12, alignItems: 'center', marginTop: 4,
-  },
-  createBtnText: { fontSize: Theme.font.base, fontWeight: '700', color: Theme.colors.background },
+  deleteBtn: { marginTop: 32 },
+  deleteBtnText: { fontSize: Theme.font.sm, color: '#C0392B', fontWeight: '500', textAlign: 'center' },
 
-  communityRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingVertical: 6, borderTopWidth: 1, borderTopColor: Theme.colors.border,
-  },
-  communityName: { fontSize: Theme.font.base, fontWeight: '600', color: Theme.colors.primary },
-  communityDesc: { fontSize: Theme.font.xs, color: Theme.colors.secondary, marginTop: 1 },
-  leaveText: { fontSize: Theme.font.sm, color: Theme.colors.secondary },
-  emptyCommunities: { fontSize: Theme.font.sm, color: Theme.colors.secondary },
 });

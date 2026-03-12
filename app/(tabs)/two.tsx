@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,13 +6,15 @@ import {
   StyleSheet,
   StatusBar,
   RefreshControl,
+  TouchableOpacity,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 
 import { Theme } from '@/constants/Theme';
-import { getFeed, getMyCommunities, Post, Community, FeedFilters } from '@/utils/api';
+import { getFeed, getMyCommunities, likePost, unlikePost, addComment, Post, Community, FeedFilters } from '@/utils/api';
 import { useAuth } from '@/utils/auth';
 import { PostCard } from '@/components/PostCard';
 import { FeedFiltersBar } from '@/components/FeedFilters';
@@ -22,18 +24,32 @@ export default function FeedScreen() {
   const { session } = useAuth();
   const [posts, setPosts] = useState<Post[]>([]);
   const [communities, setCommunities] = useState<Community[]>([]);
-  const [filters, setFilters] = useState<FeedFilters>({ dateFilter: 'all' });
+  const [filters, setFilters] = useState<FeedFilters>({});
   const [refreshing, setRefreshing] = useState(false);
 
+  const userId = session?.user.id;
+  // Track post IDs with in-flight like/unlike so a concurrent getFeed can't overwrite them
+  const pendingLikes = useRef(new Set<string>());
+
   const load = useCallback(async () => {
-    if (!session) return;
+    if (!userId) return;
     const [feedPosts, myCommunities] = await Promise.all([
       getFeed(filters).catch(() => [] as Post[]),
       getMyCommunities().catch(() => [] as Community[]),
     ]);
-    setPosts(feedPosts);
+    setPosts(prev => {
+      const pending = pendingLikes.current;
+      if (pending.size === 0) return feedPosts;
+      // Preserve optimistic like state for any posts still being processed
+      const prevMap = new Map(prev.map(p => [p.id, p]));
+      return feedPosts.map(p => {
+        if (!pending.has(p.id)) return p;
+        const cur = prevMap.get(p.id);
+        return cur ? { ...p, liked_by_me: cur.liked_by_me, likes_count: cur.likes_count } : p;
+      });
+    });
     setCommunities(myCommunities);
-  }, [session, filters]);
+  }, [userId, filters]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -55,13 +71,55 @@ export default function FeedScreen() {
     });
   };
 
+
+  const handleComment = async (postId: string, content: string) => {
+    await addComment(postId, content);
+    setPosts(prev => prev.map(p =>
+      p.id === postId ? { ...p, comments_count: (p.comments_count ?? 0) + 1 } : p
+    ));
+  };
+
+  const handleLike = (post: Post) => {
+    const liked = post.liked_by_me ?? false;
+    pendingLikes.current.add(post.id);
+    setPosts(prev => prev.map(p =>
+      p.id === post.id
+        ? { ...p, liked_by_me: !liked, likes_count: Math.max((p.likes_count ?? 0) + (liked ? -1 : 1), 0) }
+        : p
+    ));
+    (liked ? unlikePost(post.id) : likePost(post.id))
+      .then(() => pendingLikes.current.delete(post.id))
+      .catch(() => {
+        pendingLikes.current.delete(post.id);
+        setPosts(prev => prev.map(p =>
+          p.id === post.id
+            ? { ...p, liked_by_me: liked, likes_count: post.likes_count }
+            : p
+        ));
+      });
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor={Theme.colors.background} />
 
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.wordmark}>feed</Text>
+        <Text style={styles.wordmark}>muse</Text>
+        <TouchableOpacity
+          onPress={() => router.push('/communities' as any)}
+          hitSlop={12}
+          activeOpacity={0.85}
+        >
+          <LinearGradient
+            colors={['#F9C74F', '#F77FAD']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.communityBtn}
+          >
+            <Text style={styles.communityBtnText}>join a community</Text>
+          </LinearGradient>
+        </TouchableOpacity>
       </View>
 
       {/* Filters */}
@@ -77,7 +135,19 @@ export default function FeedScreen() {
         data={posts}
         keyExtractor={item => item.id}
         renderItem={({ item }) => (
-          <PostCard post={item} onPress={() => handlePostPress(item)} />
+          <PostCard
+            post={item}
+            onPress={() => handlePostPress(item)}
+            onLike={handleLike}
+            onComment={handleComment}
+            onAuthorPress={() => {
+              if (item.user_id === session?.user?.id) {
+                router.push('/profile' as any);
+              } else {
+                router.push({ pathname: '/profile/[userId]' as any, params: { userId: item.user_id } });
+              }
+            }}
+          />
         )}
         style={styles.list}
         contentContainerStyle={styles.listContent}
@@ -112,6 +182,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   wordmark: {
     fontFamily: Theme.font.brand,
@@ -119,6 +192,13 @@ const styles = StyleSheet.create({
     color: Theme.colors.brandWarm,
     letterSpacing: -0.5,
   },
+
+  communityBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: Theme.colors.accent, borderRadius: 100,
+    paddingHorizontal: 12, paddingVertical: 6,
+  },
+  communityBtnText: { fontSize: Theme.font.xs, fontWeight: '700', color: Theme.colors.background },
 
   list: { flex: 1, backgroundColor: Theme.colors.background },
   listContent: { paddingTop: 8, paddingBottom: 32 },

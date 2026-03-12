@@ -9,10 +9,10 @@ export const Theme = {
     primary: '#0B0B0B',
     secondary: '#666666',
 
-    // Coral accent — brand color
-    accent: '#D4574A',
-    lime: '#D4574A',             // kept for compat; panel bg is now a gradient
-    limeText: '#0B0B0B',         // text on light panel
+    // Primary accent — muse steel blue
+    accent: '#3A87B5',
+    lime: '#3A87B5',             // kept for compat
+    limeText: '#0B0B0B',
     limeMuted: 'rgba(0,0,0,0.42)',
 
     // Calendar circles (on panel gradient)
@@ -21,10 +21,10 @@ export const Theme = {
     disabledOnLime: 'rgba(0,0,0,0.28)',
 
     // Accent tint (for icon backgrounds etc)
-    accentLight: 'rgba(212,87,74,0.12)',
+    accentLight: 'rgba(58,135,181,0.10)',
 
-    // Brand coral — wordmarks on light background
-    brandWarm: '#D4574A',
+    // Brand color — wordmarks + tab bar active tint
+    brandWarm: '#E8272D',
 
     // General
     border: 'rgba(0,0,0,0.1)',

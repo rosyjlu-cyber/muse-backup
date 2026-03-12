@@ -1,3 +1,4 @@
+import { StyleSheet } from 'react-native';
 import { Tabs } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { Theme } from '@/constants/Theme';
@@ -8,36 +9,37 @@ export default function TabLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: Theme.colors.surface,
+          backgroundColor: Theme.colors.background,
           borderTopColor: Theme.colors.border,
-          borderTopWidth: 1,
-          height: 58,
-          paddingBottom: 8,
+          borderTopWidth: StyleSheet.hairlineWidth,
+          height: 68,
+          paddingBottom: 14,
+          paddingTop: 2,
         },
         tabBarActiveTintColor: Theme.colors.brandWarm,
-        tabBarInactiveTintColor: Theme.colors.disabled,
+        tabBarInactiveTintColor: 'rgba(0,0,0,0.45)',
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '600',
-          letterSpacing: 0.3,
+          letterSpacing: 0.2,
         },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'journal',
+          title: 'your journal',
           tabBarIcon: ({ color, size }) => (
-            <Feather name="sun" color={color} size={size - 2} />
+            <Feather name="calendar" color={color} size={size - 2} />
           ),
         }}
       />
       <Tabs.Screen
         name="two"
         options={{
-          title: 'feed',
+          title: 'community',
           tabBarIcon: ({ color, size }) => (
-            <Feather name="image" color={color} size={size - 2} />
+            <Feather name="users" color={color} size={size - 2} />
           ),
         }}
       />

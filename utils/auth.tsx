@@ -8,6 +8,7 @@ interface AuthState {
   profile: Profile | null;
   loading: boolean;
   refreshProfile: () => Promise<void>;
+  reloadSession: (sess?: Session | null) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState>({
@@ -15,6 +16,7 @@ const AuthContext = createContext<AuthState>({
   profile: null,
   loading: true,
   refreshProfile: async () => {},
+  reloadSession: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -25,6 +27,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshProfile = async () => {
     const p = await getMyProfile();
     setProfile(p);
+  };
+
+  // Call this after sign-in to force-sync state without relying on onAuthStateChange.
+  // Pass the session directly (from signInWithPassword response) to avoid getSession() timing issues on mobile.
+  const reloadSession = async (sess?: Session | null) => {
+    const resolvedSession = sess !== undefined
+      ? sess
+      : (await supabase.auth.getSession()).data.session;
+    setSession(resolvedSession);
+    if (resolvedSession) {
+      try {
+        const p = await getMyProfile();
+        setProfile(p);
+      } catch {
+        // Profile fetch failed — session is still valid, AuthGate will navigate
+      }
+    } else {
+      setProfile(null);
+    }
   };
 
   useEffect(() => {
@@ -55,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ session, profile, loading, refreshProfile }}>
+    <AuthContext.Provider value={{ session, profile, loading, refreshProfile, reloadSession }}>
       {children}
     </AuthContext.Provider>
   );

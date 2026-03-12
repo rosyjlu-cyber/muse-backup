@@ -66,7 +66,7 @@ export function TagInput({ value, onChange, placeholder = 'add tags...' }: TagIn
           placeholder={value.length === 0 ? placeholder : ''}
           placeholderTextColor={Theme.colors.disabled}
           returnKeyType="done"
-          blurOnSubmit={false}
+          submitBehavior="blurAndSubmit"
           autoCapitalize="none"
           autoCorrect={false}
         />

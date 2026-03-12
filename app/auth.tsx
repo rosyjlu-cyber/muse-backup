@@ -4,19 +4,21 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Theme } from '@/constants/Theme';
 import { signIn, signUp } from '@/utils/api';
+import { useAuth } from '@/utils/auth';
 
 export default function AuthScreen() {
-  const router = useRouter();
+  const { reloadSession } = useAuth();
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -26,26 +28,27 @@ export default function AuthScreen() {
     if (!email.trim() || !password) return;
     setLoading(true);
     try {
+      const showAlert = (msg: string) =>
+        Platform.OS === 'web' ? window.alert(msg) : Alert.alert('error', msg);
+
       if (mode === 'signup') {
         const { data, error } = await signUp(email.trim(), password);
         if (error) {
-          Alert.alert('error', error.message.toLowerCase());
+          showAlert(error.message.toLowerCase());
         } else if (!data.session) {
-          // Email confirmation is enabled — session won't exist until confirmed
-          Alert.alert(
-            'check your email',
-            'we sent you a confirmation link. click it, then come back and sign in.',
-            [{ text: 'ok', onPress: () => setMode('signin') }]
-          );
+          const msg = 'we sent you a confirmation link. click it, then come back and sign in.';
+          Platform.OS === 'web' ? window.alert(msg) : Alert.alert('check your email', msg, [{ text: 'ok', onPress: () => setMode('signin') }]);
+          setMode('signin');
         } else {
-          router.replace('/(tabs)' as any);
+          await reloadSession(data.session); // pass session directly
         }
       } else {
-        const { error } = await signIn(email.trim(), password);
+        const { data, error } = await signIn(email.trim(), password);
         if (error) {
-          Alert.alert('error', error.message.toLowerCase());
+          showAlert(error.message.toLowerCase());
         } else {
-          router.replace('/(tabs)' as any);
+          await AsyncStorage.setItem('muse_onboarding_done', 'true');
+          await reloadSession(data.session);
         }
       }
     } finally {
@@ -84,11 +87,10 @@ export default function AuthScreen() {
             onSubmitEditing={handleSubmit}
           />
 
-          <TouchableOpacity
+          <Pressable
             style={[styles.btn, loading && styles.btnDisabled]}
             onPress={handleSubmit}
             disabled={loading}
-            activeOpacity={0.85}
           >
             {loading ? (
               <ActivityIndicator color={Theme.colors.background} />
@@ -97,7 +99,7 @@ export default function AuthScreen() {
                 {mode === 'signup' ? 'create account' : 'sign in'}
               </Text>
             )}
-          </TouchableOpacity>
+          </Pressable>
         </View>
 
         <TouchableOpacity onPress={() => setMode(m => m === 'signin' ? 'signup' : 'signin')}>
