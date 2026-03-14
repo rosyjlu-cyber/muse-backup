@@ -124,7 +124,7 @@ export default function UserProfileScreen() {
         <StatusBar barStyle="light-content" backgroundColor={Theme.colors.background} />
         <HeaderBar />
         <View style={styles.centered}>
-          <ActivityIndicator color={Theme.colors.accent} />
+          <ActivityIndicator color={Theme.colors.brandWarm} />
         </View>
       </SafeAreaView>
     );

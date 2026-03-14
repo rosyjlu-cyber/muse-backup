@@ -1,0 +1,6 @@
+{
+  // Deno config for Supabase Edge Functions — tells VSCode to use Deno type checking
+  "compilerOptions": {
+    "lib": ["deno.window"]
+  }
+}

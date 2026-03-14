@@ -62,7 +62,7 @@ export default function ProfileScreen() {
   if (!profile) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: Theme.colors.background, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator color={Theme.colors.accent} />
+        <ActivityIndicator color={Theme.colors.brandWarm} />
       </SafeAreaView>
     );
   }
@@ -258,7 +258,7 @@ const styles = StyleSheet.create({
   },
   backText: { fontSize: Theme.font.base, color: Theme.colors.primary, fontWeight: '600' },
   headerTitle: {
-    fontFamily: Theme.font.brand, fontSize: 22,
+    fontFamily: 'Caprasimo_400Regular', fontSize: 22,
     color: Theme.colors.primary, letterSpacing: -0.3,
   },
   signOutText: { fontSize: Theme.font.sm, color: '#D9534F', fontWeight: '500' },

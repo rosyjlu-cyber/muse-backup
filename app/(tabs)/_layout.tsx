@@ -10,19 +10,19 @@ export default function TabLayout() {
         headerShown: false,
         tabBarStyle: {
           backgroundColor: Theme.colors.background,
-          borderTopColor: Theme.colors.border,
-          borderTopWidth: StyleSheet.hairlineWidth,
-          height: 68,
-          paddingBottom: 14,
-          paddingTop: 2,
+          borderTopWidth: 0,
+          height: 56,
+          paddingBottom: 8,
+          paddingTop: 8,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: -3 },
+          shadowOpacity: 0.10,
+          shadowRadius: 6,
+          elevation: 12,
         },
         tabBarActiveTintColor: Theme.colors.brandWarm,
-        tabBarInactiveTintColor: 'rgba(0,0,0,0.45)',
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '600',
-          letterSpacing: 0.2,
-        },
+        tabBarInactiveTintColor: 'rgba(0,0,0,0.35)',
+        tabBarShowLabel: false,
       }}
     >
       <Tabs.Screen

@@ -43,6 +43,9 @@ export interface Comment {
   user_id: string;
   content: string;
   created_at: string;
+  parent_comment_id?: string | null;
+  likes_count?: number;
+  liked_by_me?: boolean;
   profile?: Pick<Profile, "username" | "display_name" | "avatar_url">;
 }
 
@@ -56,6 +59,28 @@ export interface Community {
   created_at: string;
   member_count?: number;
   is_member?: boolean;
+}
+
+export interface WardrobeItem {
+  id: string;
+  user_id: string;
+  label: string;
+  description: string | null;
+  ai_description: string | null;
+  category: string | null;
+  brand: string | null;
+  link_url: string | null;
+  generated_image_url: string | null;
+  tags: string[];
+  created_at: string;
+  photos?: WardrobeItemPhoto[];
+}
+
+export interface WardrobeItemPhoto {
+  id: string;
+  item_id: string;
+  photo_url: string;
+  created_at: string;
 }
 
 export interface FeedFilters {
@@ -636,6 +661,24 @@ export async function unlikePost(postId: string): Promise<void> {
   if (error) throw error;
 }
 
+export async function getPostLikers(postId: string): Promise<Profile[]> {
+  const { data: likeRows, error: likesErr } = await supabase
+    .from("likes")
+    .select("user_id, created_at")
+    .eq("post_id", postId)
+    .order("created_at", { ascending: false });
+  if (likesErr) throw likesErr;
+  if (!likeRows || likeRows.length === 0) return [];
+  const userIds = likeRows.map((r: any) => r.user_id);
+  const { data: profiles, error: profilesErr } = await supabase
+    .from("profiles")
+    .select("id, username, display_name, avatar_url, is_public, created_at")
+    .in("id", userIds);
+  if (profilesErr) throw profilesErr;
+  const profileMap = Object.fromEntries((profiles ?? []).map((p: any) => [p.id, p]));
+  return userIds.map((id: string) => profileMap[id]).filter(Boolean) as Profile[];
+}
+
 // ─── Comments ─────────────────────────────────────────────────────────────────
 
 export async function getComments(postId: string): Promise<Comment[]> {
@@ -647,26 +690,71 @@ export async function getComments(postId: string): Promise<Comment[]> {
   if (error) throw error;
   const comments = (data ?? []) as Comment[];
   if (comments.length === 0) return comments;
+
   const userIds = [...new Set(comments.map((c) => c.user_id))];
   const { data: profiles } = await supabase
     .from("profiles")
     .select("id, username, display_name, avatar_url")
     .in("id", userIds);
   const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
-  return comments.map((c) => ({ ...c, profile: profileMap.get(c.user_id) }));
+  const withProfiles = comments.map((c) => ({ ...c, profile: profileMap.get(c.user_id) }));
+
+  // Attach liked_by_me for current user (requires comment_likes table migration)
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      const commentIds = comments.map((c) => c.id);
+      const { data: myLikes } = await supabase
+        .from("comment_likes")
+        .select("comment_id")
+        .in("comment_id", commentIds)
+        .eq("user_id", session.user.id);
+      const likedSet = new Set((myLikes ?? []).map((l: any) => l.comment_id));
+      return withProfiles.map((c) => ({ ...c, liked_by_me: likedSet.has(c.id) }));
+    }
+  } catch { /* comment_likes table may not exist yet */ }
+
+  return withProfiles;
+}
+
+export async function likeComment(commentId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("not logged in");
+  const { error } = await supabase
+    .from("comment_likes")
+    .insert({ comment_id: commentId, user_id: user.id });
+  if (error) throw error;
+}
+
+export async function unlikeComment(commentId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("not logged in");
+  const { error } = await supabase
+    .from("comment_likes")
+    .delete()
+    .eq("comment_id", commentId)
+    .eq("user_id", user.id);
+  if (error) throw error;
 }
 
 export async function addComment(
   postId: string,
   content: string,
+  parentCommentId?: string,
 ): Promise<Comment> {
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) throw new Error("not logged in");
+  const insertData: Record<string, unknown> = {
+    post_id: postId,
+    user_id: user.id,
+    content: content.trim(),
+  };
+  if (parentCommentId) insertData.parent_comment_id = parentCommentId;
   const { data, error } = await supabase
     .from("comments")
-    .insert({ post_id: postId, user_id: user.id, content: content.trim() })
+    .insert(insertData)
     .select()
     .single();
   if (error) throw error;
@@ -679,6 +767,163 @@ export async function deleteComment(commentId: string): Promise<void> {
     .delete()
     .eq("id", commentId);
   if (error) throw error;
+}
+
+// ─── Wardrobe (AI-powered closet) ────────────────────────────────────────────
+
+export async function createWardrobeItem(label: string): Promise<WardrobeItem> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('not logged in');
+  const { data, error } = await supabase
+    .from('wardrobe_items')
+    .insert({ user_id: user.id, label })
+    .select().single();
+  if (error) throw error;
+  return data as WardrobeItem;
+}
+
+export async function getWardrobeItems(userId: string): Promise<WardrobeItem[]> {
+  const { data, error } = await supabase
+    .from('wardrobe_items')
+    .select('*, photos:wardrobe_item_photos(*)')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as WardrobeItem[];
+}
+
+export async function getWardrobeItem(id: string): Promise<WardrobeItem | null> {
+  const { data } = await supabase
+    .from('wardrobe_items')
+    .select('*, photos:wardrobe_item_photos(*)')
+    .eq('id', id)
+    .single();
+  return data as WardrobeItem | null;
+}
+
+export async function updateWardrobeItem(
+  id: string,
+  updates: { label?: string; description?: string | null; link_url?: string | null; category?: string | null; brand?: string | null; tags?: string[] },
+): Promise<WardrobeItem> {
+  const { data, error } = await supabase
+    .from('wardrobe_items').update(updates).eq('id', id).select().single();
+  if (error) throw error;
+  return data as WardrobeItem;
+}
+
+export async function deleteWardrobeItem(id: string): Promise<void> {
+  const { error } = await supabase.from('wardrobe_items').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function addWardrobeItemPhoto(
+  itemId: string,
+  localUri: string,
+): Promise<WardrobeItemPhoto> {
+  const ext = localUri.split('.').pop()?.split('?')[0] ?? 'jpg';
+  const path = `wardrobe/${itemId}/${Date.now()}.${ext}`;
+  const fileData = await uriToBlob(localUri);
+  const { error: uploadErr } = await supabase.storage
+    .from('outfit-photos')
+    .upload(path, fileData, { contentType: `image/${ext}` });
+  if (uploadErr) throw uploadErr;
+  const { data: { publicUrl } } = supabase.storage.from('outfit-photos').getPublicUrl(path);
+  const { data, error } = await supabase
+    .from('wardrobe_item_photos')
+    .insert({ item_id: itemId, photo_url: publicUrl })
+    .select().single();
+  if (error) throw error;
+  const photo = data as WardrobeItemPhoto;
+  // Fire-and-forget background removal (requires REMOVEBG_API_KEY secret in edge function)
+  supabase.functions.invoke('analyze-outfit', {
+    body: { action: 'processBackground', photoId: photo.id },
+  }).catch(() => {});
+  return photo;
+}
+
+export async function scanOutfit(postId: string, photoUrl: string): Promise<WardrobeItem[]> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const { data, error } = await supabase.functions.invoke('analyze-outfit', {
+    body: { action: 'scan', postId, photoUrl },
+    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+  });
+  if (error) throw new Error(error.message);
+  if (data?.error) throw new Error(data.error);
+  return (data?.items ?? []) as WardrobeItem[];
+}
+
+export async function generateItemImage(itemId: string): Promise<WardrobeItem> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const { data, error } = await supabase.functions.invoke('analyze-outfit', {
+    body: { action: 'generate', itemId },
+    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+  });
+  if (error) throw new Error(error.message);
+  if (data?.error) throw new Error(data.error);
+  return data.item as WardrobeItem;
+}
+
+export async function getPostWardrobeItems(postId: string): Promise<WardrobeItem[]> {
+  const { data, error } = await supabase
+    .from('post_wardrobe_items')
+    .select('item:wardrobe_items(*)')
+    .eq('post_id', postId);
+  if (error) throw error;
+  return (data ?? []).map((row: any) => row.item).filter(Boolean) as WardrobeItem[];
+}
+
+export async function removePostWardrobeItem(postId: string, itemId: string): Promise<void> {
+  const { error } = await supabase
+    .from('post_wardrobe_items')
+    .delete()
+    .eq('post_id', postId)
+    .eq('wardrobe_item_id', itemId);
+  if (error) throw error;
+}
+
+export async function addPostWardrobeItem(postId: string, itemId: string): Promise<void> {
+  const { error } = await supabase
+    .from('post_wardrobe_items')
+    .upsert({ post_id: postId, wardrobe_item_id: itemId });
+  if (error) throw error;
+}
+
+export async function mergeWardrobeItems(
+  keepId: string,
+  deleteId: string,
+  useOtherImage: boolean,
+): Promise<void> {
+  // Optionally swap the generated image to the other item's image
+  if (useOtherImage) {
+    const { data: other } = await supabase
+      .from('wardrobe_items').select('generated_image_url').eq('id', deleteId).single();
+    if (other?.generated_image_url) {
+      await supabase.from('wardrobe_items')
+        .update({ generated_image_url: other.generated_image_url }).eq('id', keepId);
+    }
+  }
+  // Re-link all posts from the deleted item to the kept item (skip conflicts)
+  const { data: links } = await supabase
+    .from('post_wardrobe_items').select('post_id').eq('wardrobe_item_id', deleteId);
+  if (links && links.length > 0) {
+    await supabase.from('post_wardrobe_items').upsert(
+      links.map((l: any) => ({ post_id: l.post_id, wardrobe_item_id: keepId })),
+      { onConflict: 'post_id,wardrobe_item_id', ignoreDuplicates: true },
+    );
+  }
+  // Delete the other item (cascades its post_wardrobe_items and photos)
+  const { error } = await supabase.from('wardrobe_items').delete().eq('id', deleteId);
+  if (error) throw error;
+}
+
+export async function getItemPosts(itemId: string): Promise<Post[]> {
+  const { data, error } = await supabase
+    .from('post_wardrobe_items')
+    .select('post:posts(id, date, photo_url, user_id, caption, tags, is_private, likes_count, comments_count, created_at)')
+    .eq('wardrobe_item_id', itemId);
+  if (error) throw error;
+  const posts = (data ?? []).map((row: any) => row.post).filter(Boolean) as Post[];
+  return posts.sort((a, b) => b.date.localeCompare(a.date));
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

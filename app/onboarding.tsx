@@ -520,7 +520,7 @@ export default function OnboardingScreen() {
               ))}
             </View>
 
-            {verifyingOTP && <ActivityIndicator color={Theme.colors.accent} style={{ marginTop: 24 }} />}
+            {verifyingOTP && <ActivityIndicator color={Theme.colors.brandWarm} style={{ marginTop: 24 }} />}
 
             <TouchableOpacity onPress={handleSendOTP} disabled={resendTimer > 0 || sendingOTP} hitSlop={8} style={{ marginTop: 28 }}>
               <Text style={[styles.resendText, resendTimer > 0 && styles.resendTextDisabled]}>
@@ -871,7 +871,7 @@ export default function OnboardingScreen() {
           ListHeaderComponent={communityHeader}
           ListEmptyComponent={
             loadingCommunities
-              ? <ActivityIndicator color={Theme.colors.accent} style={{ marginTop: 24 }} />
+              ? <ActivityIndicator color={Theme.colors.brandWarm} style={{ marginTop: 24 }} />
               : null
           }
           renderItem={({ item }) => {

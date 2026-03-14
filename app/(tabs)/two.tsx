@@ -72,11 +72,8 @@ export default function FeedScreen() {
   };
 
 
-  const handleComment = async (postId: string, content: string) => {
-    await addComment(postId, content);
-    setPosts(prev => prev.map(p =>
-      p.id === postId ? { ...p, comments_count: (p.comments_count ?? 0) + 1 } : p
-    ));
+  const handleComment = async (postId: string, content: string, parentCommentId?: string) => {
+    await addComment(postId, content, parentCommentId);
   };
 
   const handleLike = (post: Post) => {
@@ -187,7 +184,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   wordmark: {
-    fontFamily: Theme.font.brand,
+    fontFamily: 'Caprasimo_400Regular',
     fontSize: 40,
     color: Theme.colors.brandWarm,
     letterSpacing: -0.5,

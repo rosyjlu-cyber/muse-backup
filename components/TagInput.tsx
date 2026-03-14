@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
-  ScrollView,
 } from 'react-native';
 import { Theme } from '@/constants/Theme';
 
@@ -17,6 +17,7 @@ interface TagInputProps {
 
 export function TagInput({ value, onChange, placeholder = 'add tags...' }: TagInputProps) {
   const [input, setInput] = useState('');
+  const inputRef = useRef<TextInput>(null);
 
   const commit = (raw: string) => {
     const tag = raw.trim().replace(/,+$/, '').trim().toLowerCase();
@@ -40,13 +41,8 @@ export function TagInput({ value, onChange, placeholder = 'add tags...' }: TagIn
   };
 
   return (
-    <View style={styles.wrapper}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipsRow}
-        keyboardShouldPersistTaps="handled"
-      >
+    <Pressable style={styles.wrapper} onPress={() => inputRef.current?.focus()}>
+      <View style={styles.chipsRow}>
         {value.map(tag => (
           <TouchableOpacity
             key={tag}
@@ -59,6 +55,7 @@ export function TagInput({ value, onChange, placeholder = 'add tags...' }: TagIn
           </TouchableOpacity>
         ))}
         <TextInput
+          ref={inputRef}
           style={styles.input}
           value={input}
           onChangeText={handleChange}
@@ -70,8 +67,8 @@ export function TagInput({ value, onChange, placeholder = 'add tags...' }: TagIn
           autoCapitalize="none"
           autoCorrect={false}
         />
-      </ScrollView>
-    </View>
+      </View>
+    </Pressable>
   );
 }
 
@@ -86,7 +83,7 @@ const styles = StyleSheet.create({
   },
   chipsRow: {
     flexDirection: 'row',
-    flexWrap: 'nowrap',
+    flexWrap: 'wrap',
     alignItems: 'center',
     paddingHorizontal: 10,
     paddingVertical: 8,

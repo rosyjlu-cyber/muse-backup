@@ -198,7 +198,7 @@ export default function LinkPhoneScreen() {
                 ))}
               </View>
 
-              {verifying && <ActivityIndicator color={Theme.colors.accent} style={{ marginTop: 24 }} />}
+              {verifying && <ActivityIndicator color={Theme.colors.brandWarm} style={{ marginTop: 24 }} />}
 
               <TouchableOpacity onPress={() => setStep('phone')} hitSlop={8} style={{ marginTop: 28 }}>
                 <Text style={styles.resendText}>use a different number</Text>

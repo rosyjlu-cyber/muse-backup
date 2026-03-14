@@ -111,10 +111,10 @@ export default function CommunityScreen() {
     });
   };
 
-  const handleComment = async (post: Post, text: string) => {
-    await addComment(post.id, text);
+  const handleComment = async (postId: string, text: string, parentCommentId?: string) => {
+    await addComment(postId, text, parentCommentId);
     setPosts(prev => prev.map(p =>
-      p.id === post.id ? { ...p, comments_count: (p.comments_count ?? 0) + 1 } : p
+      p.id === postId ? { ...p, comments_count: (p.comments_count ?? 0) + 1 } : p
     ));
   };
 
@@ -138,7 +138,7 @@ export default function CommunityScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.loading}>
-          <ActivityIndicator color={Theme.colors.accent} />
+          <ActivityIndicator color={Theme.colors.brandWarm} />
         </View>
       </SafeAreaView>
     );

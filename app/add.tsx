@@ -17,6 +17,7 @@ import {
   Switch,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as MediaLibrary from 'expo-media-library';
@@ -24,9 +25,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 
 import { Theme } from '@/constants/Theme';
-import { upsertPost } from '@/utils/api';
+import { upsertPost, scanOutfit, generateItemImage } from '@/utils/api';
 import { formatDate, todayString } from '@/utils/dates';
 import { TagInput } from '@/components/TagInput';
+import { AUTO_SCAN_KEY } from '@/components/WardrobeGrid';
 
 const SCREEN_WIDTH = Math.min(Dimensions.get('window').width, 390);
 const ADD_BLUE       = '#5A8FA8';           // mirror steel blue
@@ -251,7 +253,18 @@ export default function AddScreen() {
           await MediaLibrary.saveToLibraryAsync(photoUri);
         }
       }
-      await upsertPost(date, photoUri, caption, tags, isPrivate);
+      const savedPost = await upsertPost(date, photoUri, caption, tags, isPrivate);
+      const autoScanVal = await AsyncStorage.getItem(AUTO_SCAN_KEY);
+      const autoScanOn = autoScanVal === null || autoScanVal === 'true';
+      if (autoScanOn) {
+        scanOutfit(savedPost.id, savedPost.photo_url)
+          .then(scanned => {
+            scanned.filter(i => !i.generated_image_url).forEach(i => {
+              generateItemImage(i.id).catch(() => {});
+            });
+          })
+          .catch(() => {});
+      }
       router.replace({ pathname: '/entry/[date]' as any, params: { date } });
     } catch (e: any) {
       setSaveError(e?.message ?? 'could not save your fit. try again?');

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,8 @@ import { Feather } from '@expo/vector-icons';
 import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
 
 import { Theme } from '@/constants/Theme';
-import { getMyPosts, Post } from '@/utils/api';
+import { getMyPosts, Post, createWardrobeItem, addWardrobeItemPhoto } from '@/utils/api';
+import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/utils/auth';
 import {
   calculateStreak,
@@ -25,6 +26,7 @@ import {
   formatDate,
 } from '@/utils/dates';
 import { CalendarGrid } from '@/components/CalendarGrid';
+import { WardrobeGrid } from '@/components/WardrobeGrid';
 
 const SCREEN_WIDTH = Math.min(Dimensions.get('window').width, 390);
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -77,6 +79,7 @@ export default function JournalHome() {
   const [viewMonth, setViewMonth] = useState(now.getMonth());
   const [containerH, setContainerH] = useState(0);
   const [scrollY, setScrollY] = useState(0);
+  const [activeTab, setActiveTab] = useState<'journal' | 'closet'>('journal');
 
   useFocusEffect(
     useCallback(() => {
@@ -85,7 +88,7 @@ export default function JournalHome() {
           setPosts([...all].sort((a, b) => b.date.localeCompare(a.date)));
         });
       }
-    }, [session])
+    }, [session?.user.id])
   );
 
   const entries = posts.map(postToEntry);
@@ -124,10 +127,22 @@ export default function JournalHome() {
   const thisMonthCount = posts.filter(p => p.date.startsWith(thisMonthPrefix)).length;
 
   const goToAdd = () => router.push({ pathname: '/add' as any, params: { date: todayStr } });
+
+  const handleAddClosetItem = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return;
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    if (result.canceled) return;
+    try {
+      const item = await createWardrobeItem('untitled');
+      await addWardrobeItemPhoto(item.id, result.assets[0].uri);
+      router.push({ pathname: '/wardrobe/[id]' as any, params: { id: item.id } });
+    } catch {}
+  };
   const goToTodayEntry = () => router.push({ pathname: '/entry/[date]' as any, params: { date: todayStr } });
 
   const insets = useSafeAreaInsets();
-  const headerH = insets.top + 64;
+  const headerH = insets.top + 72;
   // Photo: 3:4 portrait ratio, width-first. 78% screen width, height derived from that.
   // Capped so panel always shows at least the streak row on short devices.
   const photoW_target = Math.round(SCREEN_WIDTH * 0.78);
@@ -190,7 +205,7 @@ export default function JournalHome() {
                 <View style={styles.photoLoggedRow}>
                   <Text style={styles.photoLoggedText}>today's look</Text>
                   <View style={styles.checkBadge}>
-                    <Feather name="check" size={11} color="#0B0B0B" />
+                    <Feather name="check" size={11} color="#fff" />
                   </View>
                 </View>
                 {!!todayPost.caption && (
@@ -255,23 +270,52 @@ export default function JournalHome() {
             </View>
           </View>
 
-          <CalendarGrid
-            year={viewYear}
-            month={viewMonth}
-            entries={entries}
-            onDayPress={handleDayPress}
-            onPrevMonth={handlePrevMonth}
-            onNextMonth={handleNextMonth}
-            canGoNext={!isCurrentMonth}
-          />
-
-          <View style={styles.summary}>
-            <Text style={styles.summaryText}>
-              {thisMonthCount === 0
-                ? 'no looks logged yet this month'
-                : <>{thisMonthCount} look{thisMonthCount !== 1 ? 's' : ''} this month <Text style={styles.summaryEmoji}>🎉</Text></>}
-            </Text>
+          {/* Journal / Wardrobe underline tabs */}
+          <View style={styles.tabRow}>
+            {(['journal', 'closet'] as const).map(tab => (
+              <TouchableOpacity
+                key={tab}
+                onPress={() => {
+                    setActiveTab(tab);
+                }}
+                style={styles.tabItem}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+                  {tab}
+                </Text>
+                <View style={[styles.tabUnderline, activeTab === tab && styles.tabUnderlineActive]} />
+              </TouchableOpacity>
+            ))}
           </View>
+
+          {activeTab !== 'closet' ? (
+            <>
+              <CalendarGrid
+                year={viewYear}
+                month={viewMonth}
+                entries={entries}
+                onDayPress={handleDayPress}
+                onPrevMonth={handlePrevMonth}
+                onNextMonth={handleNextMonth}
+                canGoNext={!isCurrentMonth}
+              />
+              <View style={styles.summary}>
+                <Text style={styles.summaryText}>
+                  {thisMonthCount === 0
+                    ? 'no looks logged yet this month'
+                    : <>{thisMonthCount} look{thisMonthCount !== 1 ? 's' : ''} this month <Text style={styles.summaryEmoji}>🎉</Text></>}
+                </Text>
+              </View>
+            </>
+          ) : (
+            <WardrobeGrid
+              userId={session?.user.id ?? ''}
+              onItemPress={(id) => router.push({ pathname: '/wardrobe/[id]' as any, params: { id } })}
+              onAddItem={handleAddClosetItem}
+              onLogOutfit={goToAdd}
+            />
+          )}
         </LinearGradient>
       </ScrollView>
 
@@ -306,7 +350,7 @@ export default function JournalHome() {
       </View>
 
       {/* Header rendered last = above scroll, touches reach it */}
-      <View style={[styles.header, { paddingTop: insets.top + 2 }]} pointerEvents="box-none">
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]} pointerEvents="box-none">
         <Text style={styles.wordmark}>muse</Text>
         <TouchableOpacity
           style={styles.avatarBtn}
@@ -338,7 +382,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
   wordmark: {
-    fontFamily: Theme.font.brand, fontSize: 40,
+    fontFamily: 'Caprasimo_400Regular', fontSize: 40,
     color: Theme.colors.brandWarm, letterSpacing: -0.5,
   },
   avatarBtn: {},
@@ -371,6 +415,23 @@ const styles = StyleSheet.create({
   },
   handleBarContainer: { alignItems: 'center', paddingTop: 12, paddingBottom: 16 },
   handleBar: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(0,0,0,0.18)' },
+
+  tabRow: {
+    flexDirection: 'row',
+    marginBottom: 20,
+  },
+  tabItem: { flex: 1, alignItems: 'center', paddingBottom: 0 },
+  tabText: {
+    fontSize: Theme.font.sm, fontWeight: '500',
+    color: 'rgba(0,0,0,0.3)', textTransform: 'lowercase', letterSpacing: 0.3,
+    paddingBottom: 8,
+  },
+  tabTextActive: { color: Theme.colors.limeText, fontWeight: '600' },
+  tabUnderline: {
+    alignSelf: 'stretch', marginHorizontal: 16,
+    height: 1.5, borderRadius: 1, backgroundColor: 'transparent',
+  },
+  tabUnderlineActive: { backgroundColor: Theme.colors.limeText },
 
   streakRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -412,7 +473,8 @@ const styles = StyleSheet.create({
   photoLoggedText: { fontSize: Theme.font.md, fontWeight: '700', color: Theme.colors.white },
   checkBadge: {
     width: 20, height: 20, borderRadius: 10,
-    backgroundColor: Theme.colors.accent, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Theme.colors.brandWarm,
+    alignItems: 'center', justifyContent: 'center',
   },
   overlayCaptionText: {
     fontSize: Theme.font.sm, color: 'rgba(255,255,255,0.82)',
