@@ -83,6 +83,15 @@ export interface WardrobeItemPhoto {
   created_at: string;
 }
 
+export interface WardrobeSuggestion {
+  id: string;
+  user_id: string;
+  new_item: WardrobeItem;
+  existing_item: WardrobeItem;
+  dismissed: boolean;
+  created_at: string;
+}
+
 export interface FeedFilters {
   date?: string; // YYYY-MM-DD — filter to a specific day
   dateRange?: "week" | "month"; // relative range (mutually exclusive with date)
@@ -841,10 +850,14 @@ export async function addWardrobeItemPhoto(
   return photo;
 }
 
-export async function scanOutfit(postId: string, photoUrl: string): Promise<WardrobeItem[]> {
+export async function scanOutfit(
+  postId: string,
+  photoUrl: string,
+  knownItems?: Array<{ id: string; label: string; ai_description: string | null }>,
+): Promise<WardrobeItem[]> {
   const { data: { session } } = await supabase.auth.getSession();
   const { data, error } = await supabase.functions.invoke('analyze-outfit', {
-    body: { action: 'scan', postId, photoUrl },
+    body: { action: 'scan', postId, photoUrl, knownItems },
     headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
   });
   if (error) throw new Error(error.message);
@@ -893,15 +906,25 @@ export async function mergeWardrobeItems(
   deleteId: string,
   useOtherImage: boolean,
 ): Promise<void> {
-  // Optionally swap the generated image to the other item's image
-  if (useOtherImage) {
-    const { data: other } = await supabase
-      .from('wardrobe_items').select('generated_image_url').eq('id', deleteId).single();
-    if (other?.generated_image_url) {
-      await supabase.from('wardrobe_items')
-        .update({ generated_image_url: other.generated_image_url }).eq('id', keepId);
-    }
+  // Fetch both items to merge metadata
+  const [{ data: keepData }, { data: deleteData }] = await Promise.all([
+    supabase.from('wardrobe_items').select('brand, description, link_url, generated_image_url').eq('id', keepId).single(),
+    supabase.from('wardrobe_items').select('brand, description, link_url, generated_image_url').eq('id', deleteId).single(),
+  ]);
+
+  // Build update: swap image if requested; fill null brand/notes/link from the deleted item
+  const updates: Record<string, any> = {};
+  if (useOtherImage && deleteData?.generated_image_url) {
+    updates.generated_image_url = deleteData.generated_image_url;
   }
+  if (!keepData?.brand && deleteData?.brand) updates.brand = deleteData.brand;
+  if (!keepData?.description && deleteData?.description) updates.description = deleteData.description;
+  if (!keepData?.link_url && deleteData?.link_url) updates.link_url = deleteData.link_url;
+
+  if (Object.keys(updates).length > 0) {
+    await supabase.from('wardrobe_items').update(updates).eq('id', keepId);
+  }
+
   // Re-link all posts from the deleted item to the kept item (skip conflicts)
   const { data: links } = await supabase
     .from('post_wardrobe_items').select('post_id').eq('wardrobe_item_id', deleteId);
@@ -911,8 +934,32 @@ export async function mergeWardrobeItems(
       { onConflict: 'post_id,wardrobe_item_id', ignoreDuplicates: true },
     );
   }
+
   // Delete the other item (cascades its post_wardrobe_items and photos)
   const { error } = await supabase.from('wardrobe_items').delete().eq('id', deleteId);
+  if (error) throw error;
+}
+
+export async function getWardrobeSuggestions(userId: string): Promise<WardrobeSuggestion[]> {
+  const { data, error } = await supabase
+    .from('wardrobe_suggestions')
+    .select(`
+      id, user_id, dismissed, created_at,
+      new_item:wardrobe_items!wardrobe_suggestions_new_item_id_fkey(*),
+      existing_item:wardrobe_items!wardrobe_suggestions_existing_item_id_fkey(*)
+    `)
+    .eq('user_id', userId)
+    .eq('dismissed', false)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as unknown as WardrobeSuggestion[];
+}
+
+export async function dismissWardrobeSuggestion(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('wardrobe_suggestions')
+    .update({ dismissed: true })
+    .eq('id', id);
   if (error) throw error;
 }
 

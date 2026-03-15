@@ -40,234 +40,36 @@ Deno.serve(async (req) => {
   }
 });
 
-// ─── Fuzzy label matching ─────────────────────────────────────────────────────
+// ─── Suggestion matching helpers ─────────────────────────────────────────────
 
-const COLOR_WORDS = new Set([
-  "black",
-  "white",
-  "grey",
-  "gray",
-  "red",
-  "blue",
-  "green",
-  "yellow",
-  "orange",
-  "purple",
-  "pink",
-  "brown",
-  "beige",
-  "navy",
-  "cream",
-  "khaki",
-  "olive",
-  "teal",
-  "coral",
-  "burgundy",
-  "tan",
-  "ivory",
-  "charcoal",
-  "gold",
-  "silver",
-  "camel",
-  "rust",
-  "sage",
-  "lavender",
-  "maroon",
-  "mint",
-  "nude",
-  "multicolor",
-  "multicolour",
-  "patterned",
-]);
+// Jaccard similarity on label tokens, requiring same category.
+// Returns 0–1 (percentage of words that overlap). Category mismatch = 0.
+const LABEL_STOP = new Set(["a","an","the","with","and","or","of","in","on","at","by","to"]);
 
-// Visually distinctive materials/textures — different material = different item
-const MATERIAL_WORDS = new Set([
-  "velvet",
-  "tweed",
-  "silk",
-  "satin",
-  "linen",
-  "wool",
-  "woolen",
-  "leather",
-  "suede",
-  "chiffon",
-  "lace",
-  "fleece",
-  "cashmere",
-  "corduroy",
-  "shearling",
-  "mesh",
-  "denim",
-  "sequin",
-  "sequined",
-  "embroidered",
-  "crochet",
-  "knit",
-  "ribbed",
-  "woven",
-  "seersucker",
-  "chambray",
-  "canvas",
-  "organza",
-  "taffeta",
-  "brocade",
-  "jersey",
-]);
-
-// Normalized cut/silhouette descriptors — different cut = different item
-const CUT_WORDS = new Set([
-  // Necklines
-  "boatneck",
-  "crewneck",
-  "vneck",
-  "turtleneck",
-  "halter",
-  "strapless",
-  "cowl",
-  "scoop",
-  "offtheshoulder",
-  // Waist rise
-  "highrise",
-  "midrise",
-  "lowrise",
-  // Pants leg silhouette
-  "wideleg",
-  "straightleg",
-  "bootcut",
-  "barrelleg",
-  "flared",
-  "skinny",
-  "tapered",
-  // Skirt silhouettes
-  "pencil",
-  "aline",
-  "pleated",
-  "tiered",
-  "bodycon",
-  "balloon",
-  "bubble",
-  // Shorts style
-  "biker",
-  "cargo",
-  "cutoff",
-  "bermuda",
-  "capri",
-  // Garment length (tops, skirts, dresses)
-  "mini",
-  "midi",
-  "maxi",
-  "micro",
-  "crop",
-  "cropped",
-  // Footwear shaft height
-  "ankle",
-  "kneehigh",
-  "calf",
-  "thighhigh",
-]);
-
-const STOP_WORDS = new Set([
-  "a",
-  "an",
-  "the",
-  "with",
-  "and",
-  "or",
-  "of",
-  "in",
-  "on",
-  "at",
-  "by",
-  "to",
-  "my",
-  "your",
-  "is",
-  "it",
-  "its",
-  "this",
-]);
-
-// Normalize multi-word cut terms into single tokens before tokenizing
-function normalizeCuts(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/high[\s-]rise/g, "highrise")
-    .replace(/mid[\s-]rise/g, "midrise")
-    .replace(/low[\s-]rise/g, "lowrise")
-    .replace(/wide[\s-]leg/g, "wideleg")
-    .replace(/straight[\s-]leg/g, "straightleg")
-    .replace(/boot[\s-]cut/g, "bootcut")
-    .replace(/barrel[\s-]leg/g, "barrelleg")
-    .replace(/boat[\s-]neck/g, "boatneck")
-    .replace(/crew[\s-]neck/g, "crewneck")
-    .replace(/v[\s-]neck/g, "vneck")
-    .replace(/off[\s-]the[\s-]shoulder/g, "offtheshoulder")
-    .replace(/a[\s-]line/g, "aline")
-    .replace(/body[\s-]con/g, "bodycon")
-    .replace(/cut[\s-]off/g, "cutoff")
-    .replace(/knee[\s-]?high/g, "kneehigh")
-    .replace(/thigh[\s-]?high/g, "thighhigh")
-    .replace(/full[\s-]?length/g, "fulllength")
-    .replace(/\bflare\b/g, "flared")
-    .replace(/flare[\s-]leg/g, "flared");
-}
-
-function tokenize(s: string): Set<string> {
-  return new Set(
-    normalizeCuts(s)
-      .replace(/[^a-z0-9 ]/g, "")
-      .split(/\s+/)
-      .filter((w) => w && !STOP_WORDS.has(w)),
-  );
-}
-
-function itemSimilarity(
-  a: {
-    label: string;
-    ai_description?: string | null;
-    category?: string | null;
-  },
-  b: {
-    label: string;
-    ai_description?: string | null;
-    category?: string | null;
-  },
+function labelJaccard(
+  a: { label: string; category?: string | null },
+  b: { label: string; category?: string | null },
 ): number {
-  // Category gate — if both have categories and differ, can't be the same item
+  // If both items have a category, they must match. If either is missing, skip category gate.
   if (a.category && b.category && a.category !== b.category) return 0;
-
-  // Color + material checks using label + ai_description combined
-  // If both items mention colors (or materials) that don't overlap → definitely different items
-  const tokA = tokenize(`${a.label} ${a.ai_description ?? ""}`);
-  const tokB = tokenize(`${b.label} ${b.ai_description ?? ""}`);
-  const colA = [...tokA].filter((w) => COLOR_WORDS.has(w));
-  const colB = [...tokB].filter((w) => COLOR_WORDS.has(w));
-  if (colA.length > 0 && colB.length > 0 && !colA.some((c) => colB.includes(c)))
-    return 0;
-  const matA = [...tokA].filter((w) => MATERIAL_WORDS.has(w));
-  const matB = [...tokB].filter((w) => MATERIAL_WORDS.has(w));
-  if (matA.length > 0 && matB.length > 0 && !matA.some((m) => matB.includes(m)))
-    return 0;
-  const cutA = [...tokA].filter((w) => CUT_WORDS.has(w));
-  const cutB = [...tokB].filter((w) => CUT_WORDS.has(w));
-  if (cutA.length > 0 && cutB.length > 0 && !cutA.some((c) => cutB.includes(c)))
-    return 0;
-
-  // Label word-overlap (Jaccard) as the core score
-  const labA = tokenize(a.label);
-  const labB = tokenize(b.label);
-  if (labA.size === 0 || labB.size === 0) return 0;
-  let n = 0;
-  for (const w of labA) if (labB.has(w)) n++;
-  return n / Math.max(labA.size, labB.size);
+  const tok = (s: string) => new Set(
+    s.toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/)
+      .filter((w) => w.length > 1 && !LABEL_STOP.has(w)),
+  );
+  const tokA = tok(a.label);
+  const tokB = tok(b.label);
+  let intersection = 0;
+  for (const w of tokA) if (tokB.has(w)) intersection++;
+  const union = tokA.size + tokB.size - intersection;
+  return union === 0 ? 0 : intersection / union;
 }
 
-// ─── Scan: identify + match + generate ───────────────────────────────────────
+// ─── Scan: identify + insert ──────────────────────────────────────────────────
 
 async function handleScan(body: any, userId: string, supabase: any) {
-  const { postId, photoUrl } = body;
+  const { postId, photoUrl, knownItems } = body;
   if (!postId || !photoUrl) return jsonError("missing postId or photoUrl", 400);
+  const knownArr: Array<{ id: string; label: string; ai_description?: string | null }> = knownItems ?? [];
 
   // Verify post belongs to caller
   const { data: post } = await supabase
@@ -278,61 +80,108 @@ async function handleScan(body: any, userId: string, supabase: any) {
     .single();
   if (!post) return jsonError("post not found or not yours", 403);
 
-  // Fetch caller's existing wardrobe items — only fields needed for matching + prompt context
-  const { data: existing } = await supabase
-    .from("wardrobe_items")
-    .select("id, label, category, ai_description, generated_image_url")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false });
-  const existingItems: any[] = existing ?? [];
-
-  const identified = await identifyItems(photoUrl);
+  const identified = await identifyItems(photoUrl, knownArr);
   console.log(`scan: identified ${identified.length} items`);
-  if (identified.length === 0) return jsonOk({ items: [] });
+  if (identified.length === 0 && knownArr.length === 0) return jsonOk({ items: [] });
 
-  // Match each identified item to an existing wardrobe item or create a new one
+  // Always create a new wardrobe item for each identified item — never match against
+  // existing items. People commonly own multiple near-identical pieces; a duplicate is
+  // easy to delete, but a false merge loses "worn in" history and is hard to undo.
   const resolvedItems: any[] = [];
   for (const item of identified) {
-    const match = existingItems.find((e) => itemSimilarity(item, e) >= 0.7);
-    if (match) {
-      if (!resolvedItems.some((r) => r.id === match.id))
-        resolvedItems.push(match);
-    } else {
-      const { data: created, error: createErr } = await supabase
-        .from("wardrobe_items")
-        .insert({
-          user_id: userId,
-          label: item.label,
-          description: item.label, // pre-fill user notes with the label as a starting point
-          ai_description: item.ai_description ?? null,
-          category: item.category ?? null,
-        })
-        .select()
-        .single();
-      if (createErr) {
-        console.error(
-          `scan: failed to insert item "${item.label}":`,
-          createErr.message,
-        );
-      } else if (created) {
-        existingItems.push(created);
-        resolvedItems.push(created);
-      }
+    const { data: created, error: createErr } = await supabase
+      .from("wardrobe_items")
+      .insert({
+        user_id: userId,
+        label: item.label,
+        description: item.label, // pre-fill user notes with the label as a starting point
+        ai_description: item.ai_description ?? null,
+        category: item.category ?? null,
+      })
+      .select()
+      .single();
+    if (createErr) {
+      console.error(
+        `scan: failed to insert item "${item.label}":`,
+        createErr.message,
+      );
+    } else if (created) {
+      resolvedItems.push(created);
     }
   }
 
   console.log(`scan: resolved ${resolvedItems.length} items`);
   // Link post → wardrobe items (replace any previous links for this post)
   await supabase.from("post_wardrobe_items").delete().eq("post_id", postId);
+  const allLinks = [
+    ...resolvedItems.map((item) => ({ post_id: postId, wardrobe_item_id: item.id })),
+    ...knownArr.map((ki) => ({ post_id: postId, wardrobe_item_id: ki.id })),
+  ];
+  if (allLinks.length > 0) {
+    await supabase.from("post_wardrobe_items").insert(allLinks);
+  }
+
+  // Compute match suggestions in background (non-blocking)
   if (resolvedItems.length > 0) {
-    await supabase
-      .from("post_wardrobe_items")
-      .insert(
-        resolvedItems.map((item) => ({
-          post_id: postId,
-          wardrobe_item_id: item.id,
-        })),
-      );
+    const newIds = resolvedItems.map((i) => i.id);
+    EdgeRuntime.waitUntil(
+      (async () => {
+        try {
+          const { data: existingForSug } = await supabase
+            .from("wardrobe_items")
+            .select("id, label, ai_description, category")
+            .eq("user_id", userId)
+            .not("id", "in", `(${newIds.join(",")})`)
+            .order("created_at", { ascending: false })
+            .limit(200);
+          const existingItems: any[] = existingForSug ?? [];
+          const suggestions: any[] = [];
+          for (const newItem of resolvedItems) {
+            let bestScore = 0;
+            let bestMatch: any = null;
+            for (const existing of existingItems) {
+              const score = labelJaccard(newItem, existing);
+              if (score > bestScore) { bestScore = score; bestMatch = existing; }
+            }
+            if (bestMatch && bestScore >= 0.4) {
+              suggestions.push({ user_id: userId, new_item_id: newItem.id, existing_item_id: bestMatch.id });
+            }
+          }
+          if (suggestions.length > 0) {
+            await supabase.from("wardrobe_suggestions").insert(suggestions);
+            console.log(`scan: inserted ${suggestions.length} suggestions`);
+          }
+        } catch (e: any) {
+          console.error("scan: suggestion computation failed:", e?.message ?? e);
+        }
+      })(),
+    );
+  }
+
+  // Trigger image generation for each new item in the background
+  for (const item of resolvedItems) {
+    EdgeRuntime.waitUntil(
+      (async () => {
+        try {
+          console.log(`scan: generating image for item ${item.id} "${item.label}"`);
+          const url = await generateAndStore(
+            item.label,
+            item.ai_description,
+            item.id,
+            supabase,
+            photoUrl,
+            item.category,
+          );
+          await supabase
+            .from("wardrobe_items")
+            .update({ generated_image_url: url })
+            .eq("id", item.id);
+          console.log(`scan: image done for item ${item.id}`);
+        } catch (e: any) {
+          console.error(`scan: image generation failed for item ${item.id}:`, e?.message ?? e);
+        }
+      })(),
+    );
   }
 
   return jsonOk({ items: resolvedItems });
@@ -453,6 +302,7 @@ async function handleProcessBackground(
 
 async function identifyItems(
   photoUrl: string,
+  knownItems?: Array<{ label: string; ai_description?: string | null }>,
 ): Promise<Array<{ label: string; ai_description: string; category: string }>> {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -477,9 +327,9 @@ Only include: clothing, shoes, bags, hats, sunglasses, scarves, belts. Do NOT in
 Identify garment type by silhouette first, not color. If a single continuous garment covers both the torso and legs, it is a dress or jumpsuit — never jeans or pants. Do not let color (e.g. blue) cause you to misidentify a dress as jeans.
 
 Return ONLY a JSON array, no markdown fences, no explanation. Each element:
-{ "label": "3–5 word item name following the pattern [color] [most-distinctive-feature] [garment-type] — the middle slot is whichever single feature best identifies this item: material/texture (velvet, tweed, ribbed, denim, leather), cut (high-rise, wrap, flare-leg, bootcut, oversized, cropped), embellishment (bow-sleeve, ruffle-hem, sequined, floral-embroidered), or pattern (striped, plaid, tie-dye). Examples: navy ribbed crew-neck sweater, ivory velvet midi dress, olive tweed blazer, white bow-sleeve silk blouse, black ruffle-hem mini skirt, high-rise dark-wash flare-leg jeans, tan bootcut trousers. Use precise words, no filler.", "ai_description": "2–3 dense sentences, no filler words — write like a product photograph caption. Pack in: exact color with precise shade; material and texture; complete silhouette (neckline, waist rise, leg or skirt shape, sleeve length, hem length); every embellishment with exact location (e.g. bow on left shoulder, ruffle at hem, floral embroidery at cuffs); distinctive hardware or closures; for footwear, shaft height and toe shape.", "category": "top|bottom|outerwear|shoes|bag|accessory|dress" }
+{ "label": "3–5 word item name following the pattern [color] [most-distinctive-feature] [garment-type]. RULES: (1) Always start with a specific color word — never omit it (e.g. ivory, forest-green, rust, camel, white, black, navy, dark-wash). If multicolored use 'multicolor'. (2) The middle slot is the single feature that best identifies this item: material/texture (velvet, tweed, ribbed, denim, leather), cut (high-rise, wrap, flare-leg, bootcut, oversized, cropped, short-sleeve, long-sleeve, sleeveless), embellishment (bow-sleeve, ruffle-hem, sequined, floral-embroidered), or pattern (striped, plaid, tie-dye). (3) Be precise — a different cut or sleeve length is a different item. Examples: navy ribbed crew-neck sweater, ivory velvet midi dress, olive tweed blazer, white short-sleeve silk blouse, black ruffle-hem mini skirt, dark-wash flare-leg jeans, tan bootcut trousers. No filler.", "ai_description": "2–3 dense sentences written as a brief for an isolated product photograph — no filler, no vague adjectives. Include: exact color with precise shade; material and texture; complete silhouette (neckline, waist rise, leg or skirt shape, sleeve length, hem length); every embellishment with exact location (e.g. bow tied at left shoulder, ruffle trim at hem, floral embroidery at cuffs); distinctive hardware, closures, or branding; for footwear, shaft height, toe shape, sole height, and any lacing or straps. Be specific enough that a model could render the item from the description alone.", "category": "top|bottom|outerwear|shoes|bag|accessory|dress" }
 
-Max 8 items. If no person or clothing visible, return [].`,
+${knownItems && knownItems.length > 0 ? `\nThe user has already tagged these items — do NOT include them in your list:\n${knownItems.map((i) => `• ${i.label}`).join("\n")}\n` : ""}Max 8 items. If no person or clothing visible, return [].`,
             },
           ],
         },

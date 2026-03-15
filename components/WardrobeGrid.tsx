@@ -13,6 +13,34 @@ import { Theme } from '@/constants/Theme';
 import { getWardrobeItems, deleteWardrobeItem, mergeWardrobeItems, WardrobeItem } from '@/utils/api';
 
 export const USER_CATS_KEY = '@muse/user_cats';
+const DISMISSED_KEY = '@muse/dismissed_suggestions';
+
+// ─── Client-side suggestion matching ─────────────────────────────────────────
+type Suggestion = { itemA: WardrobeItem; itemB: WardrobeItem; key: string };
+
+const LABEL_STOP = new Set(['a','an','the','with','and','or','of','in','on','at','by','to']);
+
+function computeSuggestions(allItems: WardrobeItem[], dismissed: Set<string>): Suggestion[] {
+  const tok = (s: string) => new Set(
+    s.toLowerCase().replace(/[^a-z0-9 ]/g, '').split(/\s+/)
+      .filter(w => w.length > 1 && !LABEL_STOP.has(w))
+  );
+  const result: Suggestion[] = [];
+  for (let i = 0; i < allItems.length; i++) {
+    for (let j = i + 1; j < allItems.length; j++) {
+      const a = allItems[i], b = allItems[j];
+      if (a.category && b.category && a.category !== b.category) continue;
+      const tokA = tok(a.label), tokB = tok(b.label);
+      let inter = 0;
+      for (const w of tokA) if (tokB.has(w)) inter++;
+      const union = tokA.size + tokB.size - inter;
+      if (union === 0 || inter / union < 0.65) continue;
+      const key = [a.id, b.id].sort().join(':');
+      if (!dismissed.has(key)) result.push({ itemA: a, itemB: b, key });
+    }
+  }
+  return result;
+}
 export const AUTO_SCAN_KEY = '@muse/auto_scan';
 export const TAG_ORDER_KEY = '@muse/tag_order';
 
@@ -131,6 +159,14 @@ export function WardrobeGrid({ userId, onItemPress, onAddItem, onLogOutfit }: Pr
     return itemShiftAnims.current[tag];
   };
 
+  // Suggestion state
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [reviewSuggestion, setReviewSuggestion] = useState<Suggestion | null>(null);
+  const [reviewVisible, setReviewVisible] = useState(false);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewStep, setReviewStep] = useState<1 | 2>(1); // 1 = confirm, 2 = pick photo
+  const [reviewKeepA, setReviewKeepA] = useState(true);
+
   // Merge state
   const [mergeSource, setMergeSource] = useState<WardrobeItem | null>(null);
   const [mergeTarget, setMergeTarget] = useState<WardrobeItem | null>(null);
@@ -171,6 +207,7 @@ export function WardrobeGrid({ userId, onItemPress, onAddItem, onLogOutfit }: Pr
       await AsyncStorage.setItem(USER_CATS_KEY, JSON.stringify(updated));
       setUserCats(updated);
     }
+    return clean;
   }, [userId]);
 
   useEffect(() => {
@@ -178,10 +215,18 @@ export function WardrobeGrid({ userId, onItemPress, onAddItem, onLogOutfit }: Pr
     loadItems().catch(() => {}).finally(() => setLoading(false));
   }, [userId, loadItems]);
 
-  // Silent refresh when screen regains focus (e.g. back from item detail)
+  // Recompute suggestions on every focus using loaded items + AsyncStorage dismissed set
   useFocusEffect(
     useCallback(() => {
-      loadItems().catch(() => {});
+      const run = async () => {
+        const loaded = await loadItems().catch(() => undefined);
+        if (!loaded) return;
+        const withImg = loaded.filter(i => i.generated_image_url || i.photos?.[0]?.photo_url);
+        const raw = await AsyncStorage.getItem(DISMISSED_KEY).catch(() => null);
+        const dismissed = new Set<string>(raw ? JSON.parse(raw) : []);
+        setSuggestions(computeSuggestions(withImg, dismissed));
+      };
+      run();
     }, [loadItems])
   );
 
@@ -255,6 +300,53 @@ export function WardrobeGrid({ userId, onItemPress, onAddItem, onLogOutfit }: Pr
     }
   };
 
+  const advanceReview = (done: Suggestion) => {
+    const remaining = suggestions.filter(s => s.key !== done.key);
+    setSuggestions(remaining);
+    setReviewStep(1);
+    setReviewKeepA(true);
+    if (remaining.length > 0) {
+      setReviewSuggestion(remaining[0]);
+    } else {
+      setReviewVisible(false);
+      setReviewSuggestion(null);
+    }
+  };
+
+  const persistDismiss = async (key: string) => {
+    const raw = await AsyncStorage.getItem(DISMISSED_KEY).catch(() => null);
+    const arr: string[] = raw ? JSON.parse(raw) : [];
+    if (!arr.includes(key)) arr.push(key);
+    await AsyncStorage.setItem(DISMISSED_KEY, JSON.stringify(arr));
+  };
+
+  const handleConfirmMerge = async () => {
+    if (!reviewSuggestion || reviewLoading) return;
+    setReviewLoading(true);
+    try {
+      const keepId = reviewKeepA ? reviewSuggestion.itemA.id : reviewSuggestion.itemB.id;
+      const deleteId = reviewKeepA ? reviewSuggestion.itemB.id : reviewSuggestion.itemA.id;
+      await mergeWardrobeItems(keepId, deleteId, false);
+      advanceReview(reviewSuggestion);
+      loadItems().catch(() => {});
+    } catch (e: any) {
+      Alert.alert('error', e?.message ?? 'could not merge');
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const handleDifferentItem = async () => {
+    if (!reviewSuggestion || reviewLoading) return;
+    setReviewLoading(true);
+    try {
+      await persistDismiss(reviewSuggestion.key);
+      advanceReview(reviewSuggestion);
+    } catch {} finally {
+      setReviewLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -307,6 +399,12 @@ export function WardrobeGrid({ userId, onItemPress, onAddItem, onLogOutfit }: Pr
           });
       })()
     : [];
+
+  const suggestionsByItemId = new Map<string, Suggestion>();
+  for (const s of suggestions) {
+    if (!suggestionsByItemId.has(s.itemA.id)) suggestionsByItemId.set(s.itemA.id, s);
+    if (!suggestionsByItemId.has(s.itemB.id)) suggestionsByItemId.set(s.itemB.id, s);
+  }
 
   return (
     <>
@@ -396,6 +494,23 @@ export function WardrobeGrid({ userId, onItemPress, onAddItem, onLogOutfit }: Pr
           </ScrollView>
         )}
 
+        {/* Suggestion banner */}
+        {items.length > 0 && suggestions.length > 0 && (
+          <TouchableOpacity
+            style={styles.suggestionBanner}
+            onPress={() => { setReviewSuggestion(suggestions[0]); setReviewVisible(true); }}
+            activeOpacity={0.8}
+          >
+            <View style={styles.suggestionBannerLeft}>
+              <View style={styles.suggestionDotSm} />
+              <Text style={styles.suggestionBannerText}>
+                {suggestions.length === 1 ? 'already in your closet?' : `${suggestions.length} items might already be in your closet`}
+              </Text>
+            </View>
+            <Text style={styles.suggestionBannerAction}>review →</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Empty state */}
         {items.length === 0 ? (
           <View style={styles.empty}>
@@ -445,6 +560,19 @@ export function WardrobeGrid({ userId, onItemPress, onAddItem, onLogOutfit }: Pr
                         <View style={styles.catBadge}>
                           <Text style={styles.catBadgeText}>{categoryEmoji(item.category)}</Text>
                         </View>
+                      )}
+                      {suggestionsByItemId.has(item.id) && (
+                        <TouchableOpacity
+                          style={styles.suggestionBadge}
+                          onPress={() => {
+                            const sug = suggestionsByItemId.get(item.id)!;
+                            setReviewSuggestion(sug);
+                            setReviewVisible(true);
+                          }}
+                          hitSlop={6}
+                        >
+                          <View style={styles.suggestionDot} />
+                        </TouchableOpacity>
                       )}
                     </TouchableOpacity>
                   );
@@ -507,6 +635,133 @@ export function WardrobeGrid({ userId, onItemPress, onAddItem, onLogOutfit }: Pr
               />
             ))}
           </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Suggestion review modal */}
+      <Modal
+        visible={reviewVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => { setReviewStep(1); setReviewKeepA(true); setReviewVisible(false); setReviewSuggestion(null); }}
+      >
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity
+              onPress={() => {
+                if (reviewStep === 2) { setReviewStep(1); }
+                else { setReviewStep(1); setReviewKeepA(true); setReviewVisible(false); setReviewSuggestion(null); }
+              }}
+              hitSlop={12}
+            >
+              <Feather name={reviewStep === 2 ? 'arrow-left' : 'x'} size={20} color={Theme.colors.primary} />
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>
+              {reviewStep === 2 ? 'pick your fave photo' : 'already in your closet?'}
+            </Text>
+            <View style={{ width: 20 }} />
+          </View>
+
+          {reviewSuggestion && reviewStep === 1 && (
+            <ScrollView contentContainerStyle={styles.mergeConfirmContent}>
+              {suggestions.length > 1 && (
+                <Text style={styles.reviewProgress}>
+                  {suggestions.findIndex(s => s.key === reviewSuggestion.key) + 1} of {suggestions.length}
+                </Text>
+              )}
+              <Text style={styles.mergeHint}>we think these might be the same piece — are they?</Text>
+              <View style={styles.mergeCompare}>
+                {[reviewSuggestion.itemA, reviewSuggestion.itemB].map(wi => {
+                  const imgUrl = wi.generated_image_url ?? wi.photos?.[0]?.photo_url;
+                  return (
+                    <View key={wi.id} style={styles.mergeCompareCol}>
+                      {imgUrl ? (
+                        <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" />
+                      ) : (
+                        <View style={[styles.mergeCompareImg, styles.mergePlaceholder]}>
+                          <Text style={{ fontSize: 36 }}>{categoryEmoji(wi.category)}</Text>
+                        </View>
+                      )}
+                      <Text style={styles.mergeCompareLabel} numberOfLines={2}>{wi.label}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+              <TouchableOpacity onPress={() => { setReviewStep(2); setReviewKeepA(true); }} activeOpacity={0.82}>
+                <LinearGradient
+                  colors={['#fdf5b9', '#f0c8e8', '#e9b3ee']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={styles.mergeConfirmBtn}
+                >
+                  <Text style={styles.mergeConfirmBtnText}>same piece →</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleDifferentItem}
+                disabled={reviewLoading}
+                activeOpacity={0.82}
+                style={[styles.reviewBtnSecondary, { marginTop: 10 }, reviewLoading && { opacity: 0.5 }]}
+              >
+                <Text style={styles.reviewBtnSecondaryText}>different items</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+
+          {reviewSuggestion && reviewStep === 2 && (
+            <ScrollView contentContainerStyle={styles.mergeConfirmContent}>
+              <Text style={styles.mergeHint}>
+                pick the photo you love most and we'll combine all your outfits ✨
+              </Text>
+              <View style={styles.mergeCompare}>
+                {([
+                  { wi: reviewSuggestion.itemA, keepA: true },
+                  { wi: reviewSuggestion.itemB, keepA: false },
+                ] as const).map(({ wi, keepA }) => {
+                  const imgUrl = wi.generated_image_url ?? wi.photos?.[0]?.photo_url;
+                  const selected = reviewKeepA === keepA;
+                  return (
+                    <TouchableOpacity
+                      key={wi.id}
+                      style={[styles.mergeCompareCol, selected && styles.mergeCompareColActive]}
+                      onPress={() => setReviewKeepA(keepA)}
+                      activeOpacity={0.85}
+                    >
+                      {imgUrl ? (
+                        <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" />
+                      ) : (
+                        <View style={[styles.mergeCompareImg, styles.mergePlaceholder]}>
+                          <Text style={{ fontSize: 36 }}>{categoryEmoji(wi.category)}</Text>
+                        </View>
+                      )}
+                      <Text style={styles.mergeCompareLabel} numberOfLines={2}>{wi.label}</Text>
+                      {selected && (
+                        <View style={styles.mergeCheck}>
+                          <Feather name="check" size={12} color="#fff" />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={styles.mergeWarning}>the other item quietly disappears after merging</Text>
+              <TouchableOpacity
+                onPress={handleConfirmMerge}
+                disabled={reviewLoading}
+                activeOpacity={0.82}
+                style={reviewLoading ? { opacity: 0.5 } : undefined}
+              >
+                <LinearGradient
+                  colors={['#fdf5b9', '#f0c8e8', '#e9b3ee']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={styles.mergeConfirmBtn}
+                >
+                  {reviewLoading
+                    ? <ActivityIndicator color="#9B4D7E" />
+                    : <Text style={styles.mergeConfirmBtnText}>merge ✨</Text>}
+                </LinearGradient>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
         </SafeAreaView>
       </Modal>
 
@@ -798,4 +1053,60 @@ const styles = StyleSheet.create({
     borderRadius: Theme.radius.md, paddingVertical: 16, alignItems: 'center',
   },
   mergeConfirmBtnText: { fontSize: Theme.font.base, fontWeight: '700', color: '#7C3060' },
+
+  // Suggestion banner
+  suggestionBanner: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: 'rgba(232,39,45,0.05)',
+    borderRadius: Theme.radius.sm,
+    paddingHorizontal: 12, paddingVertical: 10,
+    marginBottom: 14,
+    borderWidth: 1, borderColor: 'rgba(232,39,45,0.15)',
+  },
+  suggestionBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  suggestionDotSm: { width: 6, height: 6, borderRadius: 3, backgroundColor: Theme.colors.brandWarm },
+  suggestionBannerText: { fontSize: Theme.font.xs, color: Theme.colors.primary, fontWeight: '500', flex: 1 },
+  suggestionBannerAction: { fontSize: Theme.font.xs, color: Theme.colors.brandWarm, fontWeight: '600' },
+
+  // Card badge
+  suggestionBadge: {
+    position: 'absolute', top: 6, right: 6,
+    width: 18, height: 18, borderRadius: 9,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  suggestionDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Theme.colors.brandWarm },
+
+  // Review modal
+  reviewContent: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 40 },
+  reviewProgress: {
+    fontSize: Theme.font.xs, color: Theme.colors.disabled,
+    textAlign: 'center', marginBottom: 12,
+  },
+  reviewHint: {
+    fontSize: Theme.font.sm, color: Theme.colors.secondary,
+    textAlign: 'center', lineHeight: 20, marginBottom: 24,
+  },
+  reviewRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
+  reviewItem: { flex: 1, alignItems: 'center' },
+  reviewImg: { width: COMPARE_IMG, height: COMPARE_IMG, borderRadius: 12, backgroundColor: '#fff' },
+  reviewItemLabel: {
+    fontSize: Theme.font.xs, color: Theme.colors.primary,
+    fontWeight: '500', textAlign: 'center', marginTop: 8,
+  },
+  reviewItemSub: {
+    fontSize: 10, color: Theme.colors.disabled, textAlign: 'center',
+    marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  reviewBtn: {
+    borderRadius: Theme.radius.md, paddingVertical: 14, alignItems: 'center',
+    marginBottom: 10, backgroundColor: 'rgba(232,39,45,0.07)',
+    borderWidth: 1, borderColor: 'rgba(232,39,45,0.18)',
+  },
+  reviewBtnText: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.brandWarm },
+  reviewBtnSecondary: {
+    borderRadius: Theme.radius.md, paddingVertical: 14, alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)',
+  },
+  reviewBtnSecondaryText: { fontSize: Theme.font.sm, fontWeight: '500', color: Theme.colors.secondary },
 });

@@ -15,6 +15,7 @@ import { Theme } from '@/constants/Theme';
 import {
   getWardrobeItem, updateWardrobeItem, deleteWardrobeItem,
   addWardrobeItemPhoto, getItemPosts, getWardrobeItems, mergeWardrobeItems,
+  addPostWardrobeItem, getMyPosts,
   WardrobeItem, Post,
 } from '@/utils/api';
 import { useAuth } from '@/utils/auth';
@@ -53,6 +54,12 @@ export default function WardrobeItemScreen() {
   const [showTagInput, setShowTagInput] = useState(false);
   const [allTags, setAllTags] = useState<string[]>([]);
   const [userCats, setUserCats] = useState<string[]>([]);
+
+  // Worn-in edit state
+  const [wornInEdit, setWornInEdit] = useState(false);
+  const [postPickerVisible, setPostPickerVisible] = useState(false);
+  const [allUserPosts, setAllUserPosts] = useState<Post[]>([]);
+  const [addingPostLink, setAddingPostLink] = useState(false);
 
   // Merge state
   const [mergeVisible, setMergeVisible] = useState(false);
@@ -162,6 +169,26 @@ export default function WardrobeItemScreen() {
         },
       },
     ]);
+  };
+
+  const handleOpenPostPicker = async () => {
+    const all = await getMyPosts().catch(() => []);
+    const linkedIds = new Set(posts.map(p => p.id));
+    setAllUserPosts(all.filter(p => !linkedIds.has(p.id)));
+    setPostPickerVisible(true);
+  };
+
+  const handleAddPostLink = async (post: Post) => {
+    setAddingPostLink(true);
+    try {
+      await addPostWardrobeItem(post.id, id);
+      setPosts(prev => [...prev, post]);
+      setAllUserPosts(prev => prev.filter(p => p.id !== post.id));
+    } catch (e: any) {
+      Alert.alert('error', e?.message ?? 'could not link outfit');
+    } finally {
+      setAddingPostLink(false);
+    }
   };
 
   const handleOpenMerge = async () => {
@@ -398,9 +425,14 @@ export default function WardrobeItemScreen() {
           </View>
 
           {/* Worn in */}
-          {posts.length > 0 && (
-            <View style={styles.wornInSection}>
+          <View style={styles.wornInSection}>
+            <View style={styles.wornInHeader}>
               <Text style={styles.wornInTitle}>worn in</Text>
+              <TouchableOpacity onPress={() => setWornInEdit(e => !e)} hitSlop={10} activeOpacity={0.7}>
+                <Text style={styles.wornInEditBtn}>{wornInEdit ? 'done' : 'edit'}</Text>
+              </TouchableOpacity>
+            </View>
+            {(posts.length > 0 || wornInEdit) && (
               <View style={styles.wornInGrid}>
                 {posts.map(post => (
                   <TouchableOpacity
@@ -412,9 +444,18 @@ export default function WardrobeItemScreen() {
                     <Image source={{ uri: post.photo_url }} style={styles.wornInImg} resizeMode="cover" />
                   </TouchableOpacity>
                 ))}
+                {wornInEdit && (
+                  <TouchableOpacity
+                    style={styles.wornInAddThumb}
+                    onPress={handleOpenPostPicker}
+                    activeOpacity={0.75}
+                  >
+                    <Feather name="plus" size={22} color={Theme.colors.accent} />
+                  </TouchableOpacity>
+                )}
               </View>
-            </View>
-          )}
+            )}
+          </View>
 
           {/* Merge */}
           <TouchableOpacity onPress={handleOpenMerge} activeOpacity={0.75} style={styles.mergeActionBtn}>
@@ -428,6 +469,49 @@ export default function WardrobeItemScreen() {
 
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Post picker modal */}
+      <Modal
+        visible={postPickerVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setPostPickerVisible(false)}
+      >
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setPostPickerVisible(false)} hitSlop={12}>
+              <Feather name="x" size={20} color={Theme.colors.primary} />
+            </TouchableOpacity>
+            <Text style={[styles.modalTitle, styles.modalTitleCaprasimo]}>also worn in</Text>
+            <View style={{ width: 20 }} />
+          </View>
+          {addingPostLink && (
+            <ActivityIndicator style={{ marginTop: 16 }} color={Theme.colors.brandWarm} />
+          )}
+          <FlatList
+            data={allUserPosts}
+            keyExtractor={p => p.id}
+            numColumns={3}
+            contentContainerStyle={styles.postPickerGrid}
+            columnWrapperStyle={styles.mergeGridRow}
+            renderItem={({ item: post }) => (
+              <TouchableOpacity
+                style={styles.postPickerCell}
+                onPress={() => handleAddPostLink(post)}
+                activeOpacity={0.8}
+                disabled={addingPostLink}
+              >
+                <Image source={{ uri: post.photo_url }} style={styles.postPickerImg} resizeMode="cover" />
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              <View style={styles.mergeEmpty}>
+                <Text style={styles.mergeEmptyText}>no other outfits to add</Text>
+              </View>
+            }
+          />
+        </SafeAreaView>
+      </Modal>
 
       {/* Merge modal */}
       <Modal
@@ -646,13 +730,26 @@ const styles = StyleSheet.create({
 
   // Worn in
   wornInSection: { paddingHorizontal: 16, marginTop: 8 },
+  wornInHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   wornInTitle: {
     fontSize: 10, fontWeight: '700', letterSpacing: 0.9,
-    color: Theme.colors.disabled, textTransform: 'uppercase', marginBottom: 12,
+    color: Theme.colors.disabled, textTransform: 'uppercase',
   },
+  wornInEditBtn: { fontSize: Theme.font.xs, fontWeight: '600', color: Theme.colors.secondary },
   wornInGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   wornInThumb: { width: WORN_SIZE, height: WORN_SIZE, borderRadius: 10, overflow: 'hidden' },
   wornInImg: { width: WORN_SIZE, height: WORN_SIZE },
+  wornInAddThumb: {
+    width: WORN_SIZE, height: WORN_SIZE, borderRadius: 10,
+    borderWidth: 1.5, borderColor: Theme.colors.accent, borderStyle: 'dashed',
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(58,135,181,0.04)',
+  },
+
+  // Post picker
+  postPickerGrid: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 32 },
+  postPickerCell: { width: MERGE_CELL, marginBottom: 0 },
+  postPickerImg: { width: MERGE_CELL, height: MERGE_CELL, borderRadius: 10 },
 
   // Item label (editable)
   itemLabel: {

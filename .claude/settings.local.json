@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx supabase functions deploy analyze-outfit --project-ref msoyfpmqknubagpvkpxz --no-verify-jwt)"
+    ]
+  }
+}

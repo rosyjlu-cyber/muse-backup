@@ -15,6 +15,8 @@ import {
   Animated,
   PanResponder,
   Switch,
+  FlatList,
+  Modal,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,7 +27,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 
 import { Theme } from '@/constants/Theme';
-import { upsertPost, scanOutfit, generateItemImage } from '@/utils/api';
+import { upsertPost, scanOutfit, generateItemImage, addPostWardrobeItem, getWardrobeItems, type WardrobeItem } from '@/utils/api';
+import { useAuth } from '@/utils/auth';
 import { formatDate, todayString } from '@/utils/dates';
 import { TagInput } from '@/components/TagInput';
 import { AUTO_SCAN_KEY } from '@/components/WardrobeGrid';
@@ -181,6 +184,11 @@ function CropView({
 
 // ─── Add screen ───────────────────────────────────────────────────────────────
 
+const categoryEmoji = (cat: string | null) => {
+  const m: Record<string, string> = { top: '👕', bottom: '👖', outerwear: '🧥', shoes: '👟', bag: '👜', accessory: '💍', dress: '👗' };
+  return cat ? (m[cat] ?? '🛍️') : '🛍️';
+};
+
 export default function AddScreen() {
   const { date } = useLocalSearchParams<{ date: string }>();
   const router = useRouter();
@@ -193,6 +201,26 @@ export default function AddScreen() {
   const [fromCamera, setFromCamera] = useState(false);
   const [isPrivate, setIsPrivate] = useState(false);
   const [saveToRoll, setSaveToRoll] = useState(true);
+  const { session } = useAuth();
+  const [selectedItems, setSelectedItems] = useState<WardrobeItem[]>([]);
+  const [itemPickerVisible, setItemPickerVisible] = useState(false);
+  const [allWardrobeItems, setAllWardrobeItems] = useState<WardrobeItem[]>([]);
+  const [filterCat, setFilterCat] = useState<string | null>(null);
+  const [filterTag, setFilterTag] = useState<string | null>(null);
+
+  const handleOpenItemPicker = async () => {
+    if (!session?.user.id) return;
+    const items = await getWardrobeItems(session.user.id).catch(() => []);
+    setAllWardrobeItems(items.filter(i => !selectedItems.some(s => s.id === i.id)));
+    setFilterCat(null);
+    setFilterTag(null);
+    setItemPickerVisible(true);
+  };
+
+  const handleAddItem = (item: WardrobeItem) => {
+    setSelectedItems(prev => [...prev, item]);
+    setItemPickerVisible(false);
+  };
 
   const takePhoto = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -257,13 +285,19 @@ export default function AddScreen() {
       const autoScanVal = await AsyncStorage.getItem(AUTO_SCAN_KEY);
       const autoScanOn = autoScanVal === null || autoScanVal === 'true';
       if (autoScanOn) {
-        scanOutfit(savedPost.id, savedPost.photo_url)
+        scanOutfit(
+          savedPost.id,
+          savedPost.photo_url,
+          selectedItems.map(i => ({ id: i.id, label: i.label, ai_description: i.ai_description })),
+        )
           .then(scanned => {
             scanned.filter(i => !i.generated_image_url).forEach(i => {
               generateItemImage(i.id).catch(() => {});
             });
           })
           .catch(() => {});
+      } else if (selectedItems.length > 0) {
+        Promise.all(selectedItems.map(i => addPostWardrobeItem(savedPost.id, i.id))).catch(() => {});
       }
       router.replace({ pathname: '/entry/[date]' as any, params: { date } });
     } catch (e: any) {
@@ -356,6 +390,24 @@ export default function AddScreen() {
 
           <TagInput value={tags} onChange={setTags} placeholder="add tags, e.g. streetwear, vintage..." />
 
+          <View style={styles.itemsSection}>
+            <Text style={styles.itemsSectionLabel}>items in this look</Text>
+            <View style={styles.itemsChips}>
+              {selectedItems.map(item => (
+                <View key={item.id} style={styles.itemChip}>
+                  <Text style={styles.itemChipText} numberOfLines={1}>{item.label}</Text>
+                  <TouchableOpacity onPress={() => setSelectedItems(prev => prev.filter(i => i.id !== item.id))} hitSlop={8}>
+                    <Feather name="x" size={12} color={Theme.colors.secondary} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              <TouchableOpacity style={styles.addItemChip} onPress={handleOpenItemPicker} activeOpacity={0.7}>
+                <Feather name="plus" size={13} color={Theme.colors.secondary} />
+                <Text style={styles.addItemChipText}>add item</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
           <View style={styles.togglesSection}>
             {fromCamera && (
               <View style={styles.toggleRow}>
@@ -403,6 +455,89 @@ export default function AddScreen() {
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={itemPickerVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setItemPickerVisible(false)}
+      >
+        <SafeAreaView style={styles.itemPickerSafe}>
+          {/* Fixed top section — never moves */}
+          <View>
+            <View style={styles.itemPickerHeader}>
+              <TouchableOpacity onPress={() => setItemPickerVisible(false)} hitSlop={12}>
+                <Feather name="x" size={20} color={Theme.colors.primary} />
+              </TouchableOpacity>
+              <Text style={styles.itemPickerTitle}>add items</Text>
+              <View style={{ width: 20 }} />
+            </View>
+            {allWardrobeItems.length > 0 && (() => {
+              const cats = [...new Set(allWardrobeItems.map(i => i.category).filter(Boolean))] as string[];
+              const tags = [...new Set(allWardrobeItems.flatMap(i => i.tags ?? []))];
+              return (
+                <>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll} contentContainerStyle={styles.filterContent}>
+                    <TouchableOpacity style={[styles.filterChip, !filterCat && styles.filterChipActive]} onPress={() => setFilterCat(null)} activeOpacity={0.75}>
+                      <Text style={[styles.filterChipText, !filterCat && styles.filterChipTextActive]}>all</Text>
+                    </TouchableOpacity>
+                    {cats.map(cat => (
+                      <TouchableOpacity key={cat} style={[styles.filterChip, filterCat === cat && styles.filterChipActive]} onPress={() => setFilterCat(filterCat === cat ? null : cat)} activeOpacity={0.75}>
+                        <Text style={[styles.filterChipText, filterCat === cat && styles.filterChipTextActive]}>{categoryEmoji(cat)} {cat}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                  {tags.length > 0 && (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagFilterScroll} contentContainerStyle={styles.filterContent}>
+                      {filterTag && (
+                        <TouchableOpacity style={[styles.filterChip, styles.filterChipActive]} onPress={() => setFilterTag(null)} activeOpacity={0.75}>
+                          <Text style={[styles.filterChipText, styles.filterChipTextActive]}>✕ {filterTag}</Text>
+                        </TouchableOpacity>
+                      )}
+                      {tags.filter(t => t !== filterTag).map(tag => (
+                        <TouchableOpacity key={tag} style={styles.tagFilterChip} onPress={() => setFilterTag(filterTag === tag ? null : tag)} activeOpacity={0.75}>
+                          <Text style={styles.tagFilterChipText}>{tag}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  )}
+                </>
+              );
+            })()}
+          </View>
+          {/* Scrollable content fills remaining space */}
+          {allWardrobeItems.length === 0 ? (
+            <View style={styles.itemPickerEmpty}>
+              <Text style={styles.itemPickerEmptyText}>no wardrobe items yet — add a look first to start building your wardrobe</Text>
+            </View>
+          ) : (
+            <FlatList
+              style={{ flex: 1 }}
+              data={allWardrobeItems.filter(i => {
+                if (filterCat && i.category !== filterCat) return false;
+                if (filterTag && !(i.tags ?? []).includes(filterTag)) return false;
+                return true;
+              })}
+              keyExtractor={item => item.id}
+              numColumns={2}
+              columnWrapperStyle={{ gap: 12 }}
+              contentContainerStyle={{ padding: 16, gap: 12 }}
+              renderItem={({ item }) => (
+                <TouchableOpacity style={styles.itemPickerCell} onPress={() => handleAddItem(item)} activeOpacity={0.8}>
+                  {item.generated_image_url ? (
+                    <Image source={{ uri: item.generated_image_url }} style={styles.itemPickerImg} resizeMode="cover" />
+                  ) : (
+                    <View style={[styles.itemPickerImg, styles.itemPickerPlaceholder]}>
+                      <Text style={styles.itemPickerEmoji}>{categoryEmoji(item.category)}</Text>
+                    </View>
+                  )}
+                  <Text style={styles.itemPickerLabel} numberOfLines={2}>{item.label}</Text>
+                </TouchableOpacity>
+              )}
+            />
+          )}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -453,7 +588,7 @@ const styles = StyleSheet.create({
     marginBottom: 8, letterSpacing: 0.3, textTransform: 'uppercase',
   },
   pickerTitle: {
-    fontFamily: Theme.font.brand, fontSize: 32, color: Theme.colors.primary,
+    fontFamily: 'Caprasimo_400Regular', fontSize: 32, color: Theme.colors.primary,
     letterSpacing: -0.5, textAlign: 'center', marginBottom: 6,
   },
   pickerButtons: { flexDirection: 'row', gap: 16, marginTop: 40 },
@@ -523,4 +658,74 @@ const styles = StyleSheet.create({
   toggleRowLast: { borderBottomWidth: 0 },
   toggleLabel: { fontSize: Theme.font.base, color: Theme.colors.primary, fontWeight: '500' },
   toggleSub: { fontSize: Theme.font.xs, color: Theme.colors.secondary, marginTop: 2 },
+
+  // Items in this look
+  itemsSection: {
+    marginTop: 10,
+    borderRadius: Theme.radius.md,
+    borderWidth: 1,
+    borderColor: Theme.colors.border,
+    backgroundColor: Theme.colors.surface,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  itemsSectionLabel: {
+    fontSize: 10, fontWeight: '600', color: Theme.colors.secondary,
+    textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8,
+  },
+  itemsChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  itemChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 20, backgroundColor: Theme.colors.background,
+    borderWidth: 1, borderColor: Theme.colors.border,
+    maxWidth: 160,
+  },
+  itemChipText: { fontSize: Theme.font.xs, color: Theme.colors.primary, flex: 1 },
+  addItemChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 20, borderWidth: 1, borderColor: Theme.colors.border,
+  },
+  addItemChipText: { fontSize: Theme.font.xs, color: Theme.colors.secondary },
+
+  // Item picker modal
+  itemPickerSafe: { flex: 1, backgroundColor: Theme.colors.background },
+  itemPickerHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: Theme.colors.border,
+  },
+  itemPickerTitle: {
+    fontFamily: 'Caprasimo_400Regular', fontSize: 20, color: Theme.colors.primary, letterSpacing: -0.3,
+  },
+  itemPickerCell: { flex: 1 },
+  itemPickerImg: {
+    width: '100%', aspectRatio: 1, borderRadius: Theme.radius.md,
+    backgroundColor: Theme.colors.surface,
+  } as any,
+  itemPickerPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+  itemPickerEmoji: { fontSize: 32 },
+  itemPickerLabel: { fontSize: Theme.font.xs, color: Theme.colors.primary, marginTop: 4, textAlign: 'center' },
+  itemPickerEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+  itemPickerEmptyText: { fontSize: Theme.font.sm, color: Theme.colors.secondary, textAlign: 'center', lineHeight: 20 },
+
+  // Filter rows — explicit height required so horizontal ScrollViews don't collapse to 0
+  filterScroll: { height: 44, marginTop: 8, marginBottom: 2 },
+  tagFilterScroll: { height: 40, marginBottom: 4 },
+  filterContent: { paddingHorizontal: 16, gap: 7, flexDirection: 'row', alignItems: 'center' },
+  filterChip: {
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 100, borderWidth: 1, borderColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: 'transparent',
+  },
+  filterChipActive: { backgroundColor: 'rgba(0,0,0,0.75)', borderColor: 'transparent' },
+  filterChipText: { fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.primary },
+  filterChipTextActive: { color: '#fff' },
+  tagFilterChip: {
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 100, borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)',
+    backgroundColor: 'rgba(0,0,0,0.04)',
+  },
+  tagFilterChipText: { fontSize: Theme.font.sm, fontWeight: '500', color: Theme.colors.primary },
 });
