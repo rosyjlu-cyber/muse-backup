@@ -12,22 +12,30 @@ import {
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 
 import { Theme } from '@/constants/Theme';
 import {
   getProfile,
   getPostsByUser,
-  isFollowing,
+  getFollowStatus,
   followUser,
   unfollowUser,
+  sendFollowRequest,
+  cancelFollowRequest,
   likePost,
   unlikePost,
+  savePost,
+  unsavePost,
   addComment,
   Profile,
   Post,
 } from '@/utils/api';
+import { supabase } from '@/utils/supabase';
 import { useAuth } from '@/utils/auth';
 import { PostCard } from '@/components/PostCard';
+import { WardrobeGrid } from '@/components/WardrobeGrid';
+
 
 export default function UserProfileScreen() {
   const { userId } = useLocalSearchParams<{ userId: string }>();
@@ -38,12 +46,14 @@ export default function UserProfileScreen() {
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
-  const [following, setFollowing] = useState(false);
+  const [followStatus, setFollowStatus] = useState<'following' | 'pending' | 'none'>('none');
   const [loading, setLoading] = useState(true);
+  const [communityCount, setCommunityCount] = useState(0);
+  const [activeTab, setActiveTab] = useState<'journal' | 'closet'>('journal');
 
   const pendingLikes = useRef(new Set<string>());
 
-  const canSeeContent = !!profile?.is_public || following || isOwnProfile;
+  const canSeeContent = !!profile?.is_public || followStatus === 'following' || isOwnProfile;
 
   useFocusEffect(
     useCallback(() => {
@@ -51,13 +61,15 @@ export default function UserProfileScreen() {
       setLoading(true);
       Promise.all([
         getProfile(userId),
-        session ? isFollowing(userId) : Promise.resolve(false),
+        session ? getFollowStatus(userId) : Promise.resolve('none' as const),
         getPostsByUser(userId),
+        supabase.from('community_members').select('*', { count: 'exact', head: true }).eq('user_id', userId),
       ])
-        .then(([prof, isFollow, userPosts]) => {
+        .then(([prof, status, userPosts, { count }]) => {
           setProfile(prof);
-          setFollowing(isFollow);
+          setFollowStatus(status);
           setPosts(userPosts);
+          setCommunityCount(count ?? 0);
         })
         .catch(console.error)
         .finally(() => setLoading(false));
@@ -66,18 +78,21 @@ export default function UserProfileScreen() {
 
   const handleFollowToggle = async () => {
     if (!session) { router.push('/auth' as any); return; }
-    const wasFollowing = following;
-    setFollowing(!wasFollowing);
-    try {
-      if (wasFollowing) {
-        await unfollowUser(userId);
+    const prev = followStatus;
+    if (prev === 'following') {
+      setFollowStatus('none');
+      try { await unfollowUser(userId); } catch { setFollowStatus('following'); }
+    } else if (prev === 'pending') {
+      setFollowStatus('none');
+      try { await cancelFollowRequest(userId); } catch { setFollowStatus('pending'); }
+    } else {
+      if (!profile?.is_public) {
+        setFollowStatus('pending');
+        try { await sendFollowRequest(userId); } catch { setFollowStatus('none'); }
       } else {
-        await followUser(userId);
-        // Reload posts now that we're following
-        getPostsByUser(userId).then(setPosts);
+        setFollowStatus('following');
+        try { await followUser(userId); getPostsByUser(userId).then(setPosts); } catch { setFollowStatus('none'); }
       }
-    } catch {
-      setFollowing(wasFollowing); // revert on error
     }
   };
 
@@ -101,6 +116,14 @@ export default function UserProfileScreen() {
       });
   };
 
+  const handleSave = (post: Post) => {
+    const saved = post.saved_by_me ?? false;
+    setPosts(prev => prev.map(p => p.id === post.id ? { ...p, saved_by_me: !saved } : p));
+    (saved ? unsavePost(post.id) : savePost(post.id)).catch(() => {
+      setPosts(prev => prev.map(p => p.id === post.id ? { ...p, saved_by_me: saved } : p));
+    });
+  };
+
   const handleComment = async (post: Post, text: string) => {
     await addComment(post.id, text);
     setPosts(prev => prev.map(p =>
@@ -108,21 +131,17 @@ export default function UserProfileScreen() {
     ));
   };
 
-  const HeaderBar = ({ title }: { title?: string }) => (
-    <View style={styles.header}>
-      <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
-        <Text style={styles.backText}>‹ back</Text>
-      </TouchableOpacity>
-      {title ? <Text style={styles.headerTitle}>{title}</Text> : <View />}
-      <View style={styles.headerSpacer} />
-    </View>
-  );
 
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar barStyle="light-content" backgroundColor={Theme.colors.background} />
-        <HeaderBar />
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
+            <Text style={styles.backText}>‹ back</Text>
+          </TouchableOpacity>
+          <View style={styles.headerSpacer} />
+        </View>
         <View style={styles.centered}>
           <ActivityIndicator color={Theme.colors.brandWarm} />
         </View>
@@ -134,7 +153,12 @@ export default function UserProfileScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar barStyle="light-content" backgroundColor={Theme.colors.background} />
-        <HeaderBar />
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
+            <Text style={styles.backText}>‹ back</Text>
+          </TouchableOpacity>
+          <View style={styles.headerSpacer} />
+        </View>
         <View style={styles.centered}>
           <Text style={styles.notFoundText}>user not found</Text>
         </View>
@@ -145,10 +169,18 @@ export default function UserProfileScreen() {
   const displayName = profile.display_name ?? profile.username;
   const initials = displayName[0].toUpperCase();
 
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor={Theme.colors.background} />
-      <HeaderBar title={displayName} />
+
+      {/* Header — back only, no duplicate name */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
+          <Text style={styles.backText}>‹ back</Text>
+        </TouchableOpacity>
+        <View style={styles.headerSpacer} />
+      </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* ── Profile block ── */}
@@ -172,69 +204,148 @@ export default function UserProfileScreen() {
           <Text style={styles.displayName}>{displayName}</Text>
           <Text style={styles.username}>@{profile.username}</Text>
 
-          {/* Stats */}
-          <View style={styles.statsRow}>
-            <View style={styles.stat}>
-              <Text style={styles.statNum}>{posts.length}</Text>
-              <Text style={styles.statLabel}>outfits</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.stat}>
-              <Text style={styles.statNum}>{profile.followers_count ?? 0}</Text>
-              <Text style={styles.statLabel}>followers</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.stat}>
-              <Text style={styles.statNum}>{profile.following_count ?? 0}</Text>
-              <Text style={styles.statLabel}>following</Text>
-            </View>
-          </View>
+          {profile.bio ? (
+            <Text style={styles.bioText}>{profile.bio}</Text>
+          ) : null}
 
-          {/* Follow / Unfollow */}
+          {/* Stats card */}
+          <LinearGradient
+            colors={['#F9C74F', '#F77FAD']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={styles.statsCard}
+          >
+            <View style={styles.statsGrid}>
+              <View style={styles.stat}>
+                <Text style={styles.statNum}>{posts.length}</Text>
+                <Text style={styles.statLabel}>outfits</Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={styles.statNum}>{communityCount}</Text>
+                <Text style={styles.statLabel}>communities</Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={styles.statNum}>{profile.followers_count ?? 0}</Text>
+                <Text style={styles.statLabel}>followers</Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={styles.statNum}>{profile.following_count ?? 0}</Text>
+                <Text style={styles.statLabel}>following</Text>
+              </View>
+            </View>
+
+            {(profile.style_tags?.length ?? 0) > 0 && (
+              <>
+                <View style={styles.statsTagDivider} />
+                <Text style={styles.statsTagHeader}>my style</Text>
+                <View style={styles.tagsRow}>
+                  {profile.style_tags!.map(tag => (
+                    <View key={tag} style={styles.tagChip}>
+                      <Text style={styles.tagChipText}>{tag}</Text>
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+          </LinearGradient>
+
+          {/* Follow / Unfollow / Requested */}
           {!isOwnProfile && session && (
-            <TouchableOpacity
-              style={[styles.followBtn, following && styles.followBtnActive]}
-              onPress={handleFollowToggle}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.followBtnText, following && styles.followBtnTextActive]}>
-                {following ? 'following' : 'follow'}
-              </Text>
+            <TouchableOpacity onPress={handleFollowToggle} activeOpacity={0.85} style={styles.followBtnWrap}>
+              {followStatus === 'none' ? (
+                <LinearGradient
+                  colors={['#F9C74F', '#F77FAD']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={styles.followBtn}
+                >
+                  <Text style={styles.followBtnText}>follow</Text>
+                </LinearGradient>
+              ) : (
+                <View style={[styles.followBtn, followStatus === 'pending' ? styles.followBtnPending : styles.followBtnActive]}>
+                  <Text style={styles.followBtnTextMuted}>
+                    {followStatus === 'following' ? 'following' : 'requested'}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
           )}
+
         </View>
 
-        {/* ── Content ── */}
-        {canSeeContent ? (
-          posts.length > 0 ? (
-            <View style={styles.postsContainer}>
-              {posts.map(post => (
-                <PostCard
-                  key={post.id}
-                  post={post}
-                  onPress={() =>
-                    router.push({
-                      pathname: '/entry/[date]' as any,
-                      params: { date: post.date, userId: post.user_id },
-                    })
-                  }
-                  onLike={handleLike}
-                  onComment={handleComment}
-                />
-              ))}
-            </View>
+        {/* Journal | Closet tabs — outside profileBlock so it spans the full width */}
+        <View style={styles.tabRow}>
+          {(['journal', ...(isOwnProfile || profile.share_closet ? ['closet'] : [])] as const).map(tab => (
+            <TouchableOpacity
+              key={tab}
+              onPress={() => setActiveTab(tab as 'journal' | 'closet')}
+              style={styles.tabItem}
+            >
+              <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+                {tab}
+              </Text>
+              {activeTab === tab && <View style={styles.tabUnderline} />}
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* ── Tab content ── */}
+        {activeTab === 'journal' ? (
+          canSeeContent ? (
+            posts.length > 0 ? (
+              <View style={styles.postsContainer}>
+                {posts.map(post => (
+                  <PostCard
+                    key={post.id}
+                    post={post}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/entry/[date]' as any,
+                        params: { date: post.date, userId: post.user_id },
+                      })
+                    }
+                    onLike={handleLike}
+                    onSave={handleSave}
+                    onComment={handleComment}
+                    onUserPress={(uid) => {
+                      if (uid === userId) return;
+                      router.push({ pathname: '/profile/[userId]' as any, params: { userId: uid } });
+                    }}
+                  />
+                ))}
+              </View>
+            ) : (
+              <View style={styles.emptyBlock}>
+                <Feather name="image" size={32} color={Theme.colors.disabled} />
+                <Text style={styles.emptyText}>nothing here yet</Text>
+              </View>
+            )
           ) : (
-            <View style={styles.emptyBlock}>
-              <Feather name="image" size={32} color={Theme.colors.disabled} />
-              <Text style={styles.emptyText}>no public outfits yet</Text>
+            <View style={styles.privateBlock}>
+              <Feather name="lock" size={40} color={Theme.colors.secondary} />
+              <Text style={styles.privateTitle}>this account is private</Text>
+              <Text style={styles.privateSub}>follow to see their outfits</Text>
             </View>
           )
         ) : (
-          <View style={styles.privateBlock}>
-            <Feather name="lock" size={40} color={Theme.colors.secondary} />
-            <Text style={styles.privateTitle}>this account is private</Text>
-            <Text style={styles.privateSub}>follow to see their outfits</Text>
-          </View>
+          // Closet tab
+          !canSeeContent ? (
+            <View style={styles.privateBlock}>
+              <Feather name="lock" size={40} color={Theme.colors.secondary} />
+              <Text style={styles.privateTitle}>this account is private</Text>
+              <Text style={styles.privateSub}>follow to see their closet</Text>
+            </View>
+          ) : profile.share_closet === false ? (
+            <View style={styles.privateBlock}>
+              <Feather name="lock" size={40} color={Theme.colors.secondary} />
+              <Text style={styles.privateTitle}>this closet is private</Text>
+              <Text style={styles.privateSub}>they haven't shared their wardrobe</Text>
+            </View>
+          ) : (
+            <WardrobeGrid
+              userId={userId}
+              readOnly
+              onItemPress={(id) => router.push({ pathname: '/wardrobe/[id]' as any, params: { id } })}
+            />
+          )
         )}
 
         <View style={{ height: 48 }} />
@@ -256,20 +367,13 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   backText: { fontSize: Theme.font.base, color: Theme.colors.primary, fontWeight: '600' },
-  headerTitle: {
-    fontFamily: Theme.font.brand,
-    fontSize: 22,
-    color: Theme.colors.primary,
-    letterSpacing: -0.3,
-    maxWidth: 200,
-  },
   headerSpacer: { width: 60 },
 
   profileBlock: {
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 8,
-    paddingBottom: 24,
+    paddingBottom: 16,
   },
 
   avatarArea: { marginBottom: 14, position: 'relative' },
@@ -295,46 +399,73 @@ const styles = StyleSheet.create({
   },
   username: {
     fontSize: Theme.font.sm, color: Theme.colors.secondary,
-    marginTop: 2, marginBottom: 0,
+    marginTop: 2, marginBottom: 12,
   },
 
-  statsRow: {
-    flexDirection: 'row', alignItems: 'center',
-    gap: 28, marginTop: 20, marginBottom: 20,
+  statsCard: {
+    width: '100%', borderRadius: Theme.radius.lg,
+    marginTop: 20, marginBottom: 8, padding: 4,
   },
-  stat: { alignItems: 'center', gap: 2 },
-  statNum: { fontSize: Theme.font.lg, fontWeight: '800', color: Theme.colors.primary },
-  statLabel: {
-    fontSize: Theme.font.xs, color: Theme.colors.secondary,
-    textTransform: 'uppercase', letterSpacing: 0.5,
+  statsTagDivider: { height: 1, backgroundColor: 'rgba(0,0,0,0.12)', marginHorizontal: 4, marginVertical: 8 },
+  statsTagHeader: {
+    fontSize: Theme.font.xs, fontWeight: '800', color: Theme.colors.primary,
+    textTransform: 'uppercase', letterSpacing: 0.8, opacity: 0.6,
+    paddingHorizontal: 12, marginBottom: 6,
   },
-  statDivider: { width: 1, height: 28, backgroundColor: Theme.colors.border },
+  statsGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  stat: { width: '50%', alignItems: 'center', paddingVertical: 16, gap: 3 },
+  statNum: { fontSize: 22, fontWeight: '800', color: Theme.colors.primary },
+  statLabel: { fontSize: Theme.font.xs, color: Theme.colors.primary, textTransform: 'uppercase', letterSpacing: 0.5, opacity: 0.6 },
 
+  bioText: { fontSize: Theme.font.sm, color: Theme.colors.primary, lineHeight: 20, marginBottom: 8, textAlign: 'center' },
+  tagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 12, paddingBottom: 8 },
+  tagChip: {
+    borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4,
+    backgroundColor: Theme.colors.background,
+    borderWidth: 1, borderColor: Theme.colors.border,
+  },
+  tagChipText: { fontSize: Theme.font.xs, color: Theme.colors.primary },
+
+  followBtnWrap: { width: '100%', marginBottom: 8 },
   followBtn: {
-    borderRadius: 100,
-    paddingHorizontal: 32, paddingVertical: 10,
-    borderWidth: 1.5, borderColor: Theme.colors.accent,
+    width: '100%', borderRadius: Theme.radius.md,
+    paddingVertical: 18, alignItems: 'center',
   },
   followBtnActive: {
-    backgroundColor: Theme.colors.accent,
-    borderColor: Theme.colors.accent,
+    backgroundColor: Theme.colors.surface,
+    borderWidth: 1.5, borderColor: Theme.colors.border,
   },
-  followBtnText: {
-    fontSize: Theme.font.sm, fontWeight: '700',
-    color: Theme.colors.accent, letterSpacing: 0.2,
+  followBtnPending: {
+    backgroundColor: Theme.colors.surface,
+    borderWidth: 1.5, borderColor: Theme.colors.secondary,
   },
-  followBtnTextActive: {
-    color: Theme.colors.background,
+  followBtnText: { fontSize: Theme.font.base, fontWeight: '800', color: '#0B0B0B', letterSpacing: -0.2 },
+  followBtnTextMuted: { fontSize: Theme.font.base, fontWeight: '700', color: Theme.colors.secondary },
+
+  // Tabs
+  tabRow: {
+    flexDirection: 'row',
+    marginHorizontal: '3%',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.colors.border,
+    marginBottom: 4,
+  },
+  tabItem: {
+    flex: 1, alignItems: 'center', paddingTop: 10, paddingBottom: 0,
+  },
+  tabText: {
+    fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.secondary, paddingBottom: 8,
+  },
+  tabTextActive: { color: Theme.colors.primary },
+  tabUnderline: {
+    alignSelf: 'stretch', marginHorizontal: 16,
+    height: 1.5, backgroundColor: Theme.colors.primary, borderRadius: 1,
   },
 
   postsContainer: { paddingTop: 8 },
 
-  emptyBlock: {
-    alignItems: 'center', paddingTop: 48, gap: 12,
-  },
-  emptyText: {
-    fontSize: Theme.font.sm, color: Theme.colors.secondary,
-  },
+  emptyBlock: { alignItems: 'center', paddingTop: 48, gap: 12 },
+  emptyText: { fontSize: Theme.font.sm, color: Theme.colors.secondary },
 
   privateBlock: {
     alignItems: 'center', paddingTop: 48, gap: 10,

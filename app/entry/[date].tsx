@@ -27,6 +27,7 @@ import {
   getPost, deletePost, updatePostMeta,
   followUser, unfollowUser, isFollowing,
   likePost, unlikePost, getPostLikers,
+  savePost, unsavePost,
   getComments, addComment, deleteComment, likeComment, unlikeComment,
   getPostWardrobeItems, getWardrobeItems,
   removePostWardrobeItem, addPostWardrobeItem, mergeWardrobeItems,
@@ -58,6 +59,7 @@ export default function EntryScreen() {
 
   const [likedByMe, setLikedByMe] = useState(false);
   const [likesCount, setLikesCount] = useState(0);
+  const [savedByMe, setSavedByMe] = useState(false);
 
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentText, setCommentText] = useState('');
@@ -93,6 +95,7 @@ export default function EntryScreen() {
           if (p) {
             setLikedByMe(p.liked_by_me ?? false);
             setLikesCount(p.likes_count ?? 0);
+            setSavedByMe(p.saved_by_me ?? false);
             getComments(p.id).then(setComments);
             getPostWardrobeItems(p.id).then(setWardrobeItems).catch(() => {});
           }
@@ -227,6 +230,13 @@ export default function EntryScreen() {
       setLikedByMe(prev);
       setLikesCount(c => c + (prev ? 1 : -1));
     }
+  };
+
+  const handleSaveToggle = () => {
+    if (!post || !session) return;
+    const prev = savedByMe;
+    setSavedByMe(!prev);
+    (prev ? unsavePost(post.id) : savePost(post.id)).catch(() => setSavedByMe(prev));
   };
 
   const handleAddComment = async (parentCommentId?: string) => {
@@ -398,6 +408,9 @@ export default function EntryScreen() {
             </Text>
           </TouchableOpacity>
         ) : null}
+        {isOwn && post.is_private && !editing && (
+          <Text style={styles.hiddenBadgeText}>hidden from feed</Text>
+        )}
       </View>
 
       <KeyboardAvoidingView
@@ -411,7 +424,14 @@ export default function EntryScreen() {
         >
           {/* Author (others' posts) */}
           {!isOwn && post.profile && (
-            <Text style={styles.authorText}>@{post.profile.username}</Text>
+            <TouchableOpacity
+              onPress={() => router.push({ pathname: '/profile/[userId]' as any, params: { userId: post.user_id } })}
+              hitSlop={8}
+              activeOpacity={0.7}
+              style={styles.authorPill}
+            >
+              <Text style={styles.authorText}>@{post.profile.username}</Text>
+            </TouchableOpacity>
           )}
 
           {/* Photo */}
@@ -427,6 +447,15 @@ export default function EntryScreen() {
           {/* Date row */}
           <View style={styles.dateRow}>
             <Text style={styles.dateText}>{formatDate(post.date)}</Text>
+            {!isOwn && session && (
+              <TouchableOpacity onPress={handleSaveToggle} hitSlop={10} activeOpacity={0.7}>
+                <Ionicons
+                  name={savedByMe ? 'bookmark' : 'bookmark-outline'}
+                  size={22}
+                  color={savedByMe ? Theme.colors.brandWarm : 'rgba(0,0,0,0.3)'}
+                />
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Caption + Tags + edit */}
@@ -1089,9 +1118,16 @@ const styles = StyleSheet.create({
   followBtnTextActive: { color: '#fff' },
 
   content: { paddingHorizontal: 16, paddingBottom: 16 },
+  authorPill: {
+    alignSelf: 'flex-start',
+    borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.35)',
+    borderRadius: 100,
+    paddingHorizontal: 12, paddingVertical: 4,
+    marginBottom: 10, marginLeft: 4,
+  },
   authorText: {
-    fontSize: Theme.font.sm, color: Theme.colors.secondary,
-    fontWeight: '600', marginBottom: 10,
+    fontSize: Theme.font.sm, color: 'rgba(0,0,0,0.55)',
+    fontWeight: '600',
   },
 
   photoContainer: {
@@ -1419,4 +1455,6 @@ const styles = StyleSheet.create({
   },
   mergeConfirmBtn: { borderRadius: Theme.radius.md, paddingVertical: 16, alignItems: 'center' },
   mergeConfirmBtnText: { fontSize: Theme.font.base, fontWeight: '700', color: '#7C3060' },
+
+  hiddenBadgeText: { fontSize: Theme.font.xs, color: 'rgba(0,0,0,0.4)', fontWeight: '500' },
 });

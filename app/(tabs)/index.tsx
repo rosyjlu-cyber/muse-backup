@@ -16,7 +16,7 @@ import { Feather } from '@expo/vector-icons';
 import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
 
 import { Theme } from '@/constants/Theme';
-import { getMyPosts, Post, createWardrobeItem, addWardrobeItemPhoto } from '@/utils/api';
+import { getMyPosts, getNotificationsBadgeCount, Post, createWardrobeItem, addWardrobeItemPhoto } from '@/utils/api';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/utils/auth';
 import {
@@ -80,6 +80,7 @@ export default function JournalHome() {
   const [containerH, setContainerH] = useState(0);
   const [scrollY, setScrollY] = useState(0);
   const [activeTab, setActiveTab] = useState<'journal' | 'closet'>('journal');
+  const [pendingCount, setPendingCount] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
@@ -87,6 +88,7 @@ export default function JournalHome() {
         getMyPosts().then(all => {
           setPosts([...all].sort((a, b) => b.date.localeCompare(a.date)));
         });
+        getNotificationsBadgeCount().then(({ followRequests, unread }) => setPendingCount(followRequests + unread)).catch(() => {});
       }
     }, [session?.user.id])
   );
@@ -217,7 +219,7 @@ export default function JournalHome() {
                   <View style={styles.overlayTagsRow}>
                     {todayPost.tags.slice(0, 5).map((tag, i) => (
                       <View key={i} style={styles.overlayTagChip}>
-                        <Text style={styles.overlayTagText}>#{tag}</Text>
+                        <Text style={styles.overlayTagText}>{tag}</Text>
                       </View>
                     ))}
                   </View>
@@ -352,19 +354,44 @@ export default function JournalHome() {
       {/* Header rendered last = above scroll, touches reach it */}
       <View style={[styles.header, { paddingTop: insets.top + 10 }]} pointerEvents="box-none">
         <Text style={styles.wordmark}>muse</Text>
-        <TouchableOpacity
-          style={styles.avatarBtn}
-          onPress={() => router.push('/profile' as any)}
-          activeOpacity={0.8}
-        >
-          {profile?.avatar_url ? (
-            <Image source={{ uri: profile.avatar_url }} style={styles.avatarImg} />
-          ) : (
-            <View style={styles.avatarPlaceholder}>
-              <Text style={styles.avatarInitials}>{initials}</Text>
-            </View>
+        <View style={styles.headerRight}>
+          {session && (
+            <>
+              <TouchableOpacity
+                style={styles.bellBtn}
+                onPress={() => router.push('/notifications' as any)}
+                activeOpacity={0.8}
+              >
+                <Feather name="bell" size={22} color={Theme.colors.primary} />
+                {pendingCount > 0 && (
+                  <View style={styles.bellBadge}>
+                    <Text style={styles.bellBadgeText}>{pendingCount > 9 ? '9+' : pendingCount}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.bellBtn}
+                onPress={() => router.push('/saved' as any)}
+                activeOpacity={0.8}
+              >
+                <Feather name="bookmark" size={21} color={Theme.colors.primary} />
+              </TouchableOpacity>
+            </>
           )}
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.avatarBtn}
+            onPress={() => router.push('/profile' as any)}
+            activeOpacity={0.8}
+          >
+            {profile?.avatar_url ? (
+              <Image source={{ uri: profile.avatar_url }} style={styles.avatarImg} />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Text style={styles.avatarInitials}>{initials}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -385,6 +412,16 @@ const styles = StyleSheet.create({
     fontFamily: 'Caprasimo_400Regular', fontSize: 40,
     color: Theme.colors.brandWarm, letterSpacing: -0.5,
   },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  bellBtn: { position: 'relative' },
+  bellBadge: {
+    position: 'absolute', top: -4, right: -4,
+    minWidth: 16, height: 16, borderRadius: 8,
+    backgroundColor: Theme.colors.brandWarm,
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  bellBadgeText: { fontSize: 9, fontWeight: '800', color: '#fff' },
   avatarBtn: {},
   avatarImg: { width: 34, height: 34, borderRadius: 17 },
   avatarPlaceholder: {

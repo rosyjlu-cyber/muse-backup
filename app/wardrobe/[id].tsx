@@ -7,7 +7,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -16,6 +16,7 @@ import {
   getWardrobeItem, updateWardrobeItem, deleteWardrobeItem,
   addWardrobeItemPhoto, getItemPosts, getWardrobeItems, mergeWardrobeItems,
   addPostWardrobeItem, getMyPosts,
+  saveWardrobeItem, unsaveWardrobeItem, getWardrobeItemSaveStatus,
   WardrobeItem, Post,
 } from '@/utils/api';
 import { useAuth } from '@/utils/auth';
@@ -61,6 +62,8 @@ export default function WardrobeItemScreen() {
   const [allUserPosts, setAllUserPosts] = useState<Post[]>([]);
   const [addingPostLink, setAddingPostLink] = useState(false);
 
+  const [savedItem, setSavedItem] = useState(false);
+
   // Merge state
   const [mergeVisible, setMergeVisible] = useState(false);
   const [mergeItems, setMergeItems] = useState<WardrobeItem[]>([]);
@@ -82,6 +85,7 @@ export default function WardrobeItemScreen() {
         }
       });
       getItemPosts(id).then(setPosts).catch(() => {});
+      if (session) getWardrobeItemSaveStatus(id).then(setSavedItem).catch(() => {});
       getWardrobeItems(session?.user.id ?? '').then(all => {
         const tags = [...new Set(all.flatMap(i => (i as any).tags ?? []))] as string[];
         setAllTags(tags);
@@ -129,6 +133,12 @@ export default function WardrobeItemScreen() {
     const updated = editTags.filter(t => t !== tag);
     setEditTags(updated);
     save({ tags: updated });
+  };
+
+  const handleSaveToggle = () => {
+    const next = !savedItem;
+    setSavedItem(next);
+    (next ? saveWardrobeItem(id) : unsaveWardrobeItem(id)).catch(() => setSavedItem(!next));
   };
 
   const handleOpenLink = () => {
@@ -232,6 +242,8 @@ export default function WardrobeItemScreen() {
     );
   }
 
+  const isOwn = item.user_id === session?.user.id;
+
   const allImages = [
     ...(item.generated_image_url ? [{ id: 'ai', url: item.generated_image_url }] : []),
     ...(item.photos ?? []).map(p => ({ id: p.id, url: p.photo_url })),
@@ -251,186 +263,237 @@ export default function WardrobeItemScreen() {
           <Feather name="chevron-left" size={22} color={Theme.colors.primary} />
           <Text style={styles.backText}>back</Text>
         </TouchableOpacity>
+        {session && (
+          <TouchableOpacity onPress={handleSaveToggle} hitSlop={12} style={{ paddingRight: 6, paddingTop: 2 }}>
+            <Ionicons
+              name={savedItem ? 'bookmark' : 'bookmark-outline'}
+              size={26}
+              color={savedItem ? Theme.colors.brandWarm : Theme.colors.secondary}
+            />
+          </TouchableOpacity>
+        )}
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
-          {/* Item label — editable, no image regeneration */}
-          <TextInput
-            style={styles.itemLabel}
-            value={editLabel}
-            onChangeText={setEditLabel}
-            onBlur={() => save({ label: editLabel.trim() || item.label })}
-            placeholder="item name"
-            placeholderTextColor={Theme.colors.disabled}
-            multiline
-            textAlignVertical="center"
-          />
+          {/* Item label */}
+          {isOwn ? (
+            <TextInput
+              style={styles.itemLabel}
+              value={editLabel}
+              onChangeText={setEditLabel}
+              onBlur={() => save({ label: editLabel.trim() || item.label })}
+              placeholder="item name"
+              placeholderTextColor={Theme.colors.disabled}
+              multiline
+              textAlignVertical="center"
+            />
+          ) : (
+            <Text style={styles.itemLabel}>{item.label}</Text>
+          )}
 
           {/* Photos row: thumbnails + "+" */}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photosRow} style={styles.photosScroll}>
             {allImages.map(img => (
               <Image key={img.id} source={{ uri: img.url }} style={styles.photoThumb} resizeMode="cover" />
             ))}
-            <TouchableOpacity
-              style={styles.addPhotoThumb}
-              onPress={handleAddPhoto}
-              disabled={addingPhoto}
-              activeOpacity={0.75}
-            >
-              {addingPhoto
-                ? <ActivityIndicator size="small" color={Theme.colors.brandWarm} />
-                : <Feather name="plus" size={26} color={Theme.colors.accent} />
-              }
-            </TouchableOpacity>
-          </ScrollView>
-
-          {/* Category chips */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.catsScroll} contentContainerStyle={styles.catsContent}>
-            {allCats.map(cat => {
-              const isCustom = !CATEGORIES.includes(cat);
-              return (
-                <TouchableOpacity
-                  key={cat}
-                  style={[styles.catChip, item.category === cat && styles.catChipActive]}
-                  onPress={() => handleSetCategory(cat)}
-                  onLongPress={isCustom ? () => handleDeleteUserCat(cat) : undefined}
-                  activeOpacity={0.75}
-                >
-                  <Text style={[styles.catChipText, item.category === cat && styles.catChipTextActive]}>
-                    {catEmoji(cat)} {cat}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-            {showCustomCat ? (
-              <TextInput
-                autoFocus
-                style={[styles.catChip, styles.customCatInput]}
-                placeholder="type..."
-                placeholderTextColor={Theme.colors.disabled}
-                returnKeyType="done"
-                onSubmitEditing={e => {
-                  const val = e.nativeEvent.text.trim().toLowerCase();
-                  if (val) handleSetCategory(val);
-                  setShowCustomCat(false);
-                }}
-                onBlur={() => setShowCustomCat(false)}
-              />
-            ) : (
-              <TouchableOpacity style={styles.catChip} onPress={() => setShowCustomCat(true)} activeOpacity={0.75}>
-                <Text style={styles.catChipText}>+ other</Text>
+            {isOwn && (
+              <TouchableOpacity
+                style={styles.addPhotoThumb}
+                onPress={handleAddPhoto}
+                disabled={addingPhoto}
+                activeOpacity={0.75}
+              >
+                {addingPhoto
+                  ? <ActivityIndicator size="small" color={Theme.colors.brandWarm} />
+                  : <Feather name="plus" size={26} color={Theme.colors.accent} />
+                }
               </TouchableOpacity>
             )}
           </ScrollView>
 
-          {/* Tags */}
-          <View style={styles.tagsSection}>
-            <Text style={styles.fieldLabel}>tags</Text>
-            <View style={styles.tagsRow}>
-              {showTagInput ? (
+          {/* Category chips */}
+          {(isOwn || !!item.category) && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.catsScroll} contentContainerStyle={styles.catsContent}>
+              {(isOwn ? allCats : allCats.filter(c => c === item.category)).map(cat => {
+                const isCustom = !CATEGORIES.includes(cat);
+                return (
+                  <TouchableOpacity
+                    key={cat}
+                    style={[styles.catChip, item.category === cat && styles.catChipActive]}
+                    onPress={isOwn ? () => handleSetCategory(cat) : undefined}
+                    onLongPress={isOwn && isCustom ? () => handleDeleteUserCat(cat) : undefined}
+                    activeOpacity={isOwn ? 0.75 : 1}
+                  >
+                    <Text style={[styles.catChipText, item.category === cat && styles.catChipTextActive]}>
+                      {catEmoji(cat)} {cat}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+              {isOwn && (showCustomCat ? (
                 <TextInput
                   autoFocus
-                  style={styles.tagInput}
-                  placeholder="add tag..."
+                  style={[styles.catChip, styles.customCatInput]}
+                  placeholder="type..."
                   placeholderTextColor={Theme.colors.disabled}
                   returnKeyType="done"
                   onSubmitEditing={e => {
-                    handleAddTag(e.nativeEvent.text);
-                    setShowTagInput(false);
+                    const val = e.nativeEvent.text.trim().toLowerCase();
+                    if (val) handleSetCategory(val);
+                    setShowCustomCat(false);
                   }}
-                  onBlur={() => setShowTagInput(false)}
+                  onBlur={() => setShowCustomCat(false)}
                 />
               ) : (
-                <TouchableOpacity style={styles.tagChipAdd} onPress={() => setShowTagInput(true)} activeOpacity={0.7}>
-                  <Feather name="plus" size={11} color={Theme.colors.disabled} />
-                  <Text style={styles.tagChipAddText}>add</Text>
-                </TouchableOpacity>
-              )}
-              {editTags.map(tag => (
-                <TouchableOpacity key={tag} style={styles.tagChip} onPress={() => handleRemoveTag(tag)} activeOpacity={0.7}>
-                  <Text style={styles.tagChipText}>{tag}</Text>
-                  <Feather name="x" size={10} color={Theme.colors.disabled} style={{ marginLeft: 4 }} />
+                <TouchableOpacity style={styles.catChip} onPress={() => setShowCustomCat(true)} activeOpacity={0.75}>
+                  <Text style={styles.catChipText}>+ other</Text>
                 </TouchableOpacity>
               ))}
-              {allTags.filter(t => !editTags.includes(t)).map(tag => (
-                <TouchableOpacity key={tag} style={styles.tagChipUnselected} onPress={() => handleAddTag(tag)} activeOpacity={0.7}>
-                  <Text style={styles.tagChipUnselectedText}>{tag}</Text>
-                </TouchableOpacity>
-              ))}
+            </ScrollView>
+          )}
+
+          {/* Tags */}
+          {(isOwn || editTags.length > 0) && (
+            <View style={styles.tagsSection}>
+              <Text style={styles.fieldLabel}>tags</Text>
+              <View style={styles.tagsRow}>
+                {isOwn && (showTagInput ? (
+                  <TextInput
+                    autoFocus
+                    style={styles.tagInput}
+                    placeholder="add tag..."
+                    placeholderTextColor={Theme.colors.disabled}
+                    returnKeyType="done"
+                    onSubmitEditing={e => {
+                      handleAddTag(e.nativeEvent.text);
+                      setShowTagInput(false);
+                    }}
+                    onBlur={() => setShowTagInput(false)}
+                  />
+                ) : (
+                  <TouchableOpacity style={styles.tagChipAdd} onPress={() => setShowTagInput(true)} activeOpacity={0.7}>
+                    <Feather name="plus" size={11} color={Theme.colors.disabled} />
+                    <Text style={styles.tagChipAddText}>add</Text>
+                  </TouchableOpacity>
+                ))}
+                {editTags.map(tag => (
+                  isOwn ? (
+                    <TouchableOpacity key={tag} style={styles.tagChip} onPress={() => handleRemoveTag(tag)} activeOpacity={0.7}>
+                      <Text style={styles.tagChipText}>{tag}</Text>
+                      <Feather name="x" size={10} color={Theme.colors.disabled} style={{ marginLeft: 4 }} />
+                    </TouchableOpacity>
+                  ) : (
+                    <View key={tag} style={styles.tagChip}>
+                      <Text style={styles.tagChipText}>{tag}</Text>
+                    </View>
+                  )
+                ))}
+                {isOwn && allTags.filter(t => !editTags.includes(t)).map(tag => (
+                  <TouchableOpacity key={tag} style={styles.tagChipUnselected} onPress={() => handleAddTag(tag)} activeOpacity={0.7}>
+                    <Text style={styles.tagChipUnselectedText}>{tag}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
-          </View>
+          )}
 
           <View style={styles.divider} />
 
           {/* Brand */}
-          <View style={styles.field}>
-            <Text style={styles.fieldLabel}>brand</Text>
-            <TextInput
-              style={styles.fieldInput}
-              value={editBrand}
-              onChangeText={setEditBrand}
-              onBlur={() => save({ brand: editBrand.trim() || null })}
-              placeholder=""
-              placeholderTextColor={Theme.colors.disabled}
-              returnKeyType="done"
-              submitBehavior="blurAndSubmit"
-            />
-          </View>
-
-          <View style={styles.divider} />
+          {(isOwn || !!editBrand) && (
+            <>
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>brand</Text>
+                {isOwn ? (
+                  <TextInput
+                    style={styles.fieldInput}
+                    value={editBrand}
+                    onChangeText={setEditBrand}
+                    onBlur={() => save({ brand: editBrand.trim() || null })}
+                    placeholder=""
+                    placeholderTextColor={Theme.colors.disabled}
+                    returnKeyType="done"
+                    submitBehavior="blurAndSubmit"
+                  />
+                ) : (
+                  <Text style={styles.fieldInput}>{editBrand}</Text>
+                )}
+              </View>
+              <View style={styles.divider} />
+            </>
+          )}
 
           {/* Description */}
-          <View style={styles.field}>
-            <Text style={styles.fieldLabel}>notes</Text>
-            <TextInput
-              style={styles.descInput}
-              value={editDesc}
-              onChangeText={setEditDesc}
-              onBlur={() => save({ description: editDesc.trim() || null })}
-              placeholder=""
-              placeholderTextColor={Theme.colors.disabled}
-              multiline
-              returnKeyType="done"
-              submitBehavior="blurAndSubmit"
-            />
-          </View>
-
-          <View style={styles.divider} />
+          {(isOwn || !!editDesc) && (
+            <>
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>notes</Text>
+                {isOwn ? (
+                  <TextInput
+                    style={styles.descInput}
+                    value={editDesc}
+                    onChangeText={setEditDesc}
+                    onBlur={() => save({ description: editDesc.trim() || null })}
+                    placeholder=""
+                    placeholderTextColor={Theme.colors.disabled}
+                    multiline
+                    returnKeyType="done"
+                    submitBehavior="blurAndSubmit"
+                  />
+                ) : (
+                  <Text style={styles.descInput}>{editDesc}</Text>
+                )}
+              </View>
+              <View style={styles.divider} />
+            </>
+          )}
 
           {/* Link */}
-          <View style={styles.field}>
-            <Text style={styles.fieldLabel}>link</Text>
-            <View style={styles.linkRow}>
-              <TextInput
-                style={[styles.fieldInput, { flex: 1 }]}
-                value={editLink}
-                onChangeText={setEditLink}
-                onBlur={() => save({ link_url: editLink.trim() || null })}
-                placeholder=""
-                placeholderTextColor={Theme.colors.disabled}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                returnKeyType="done"
-                submitBehavior="blurAndSubmit"
-              />
-              {!!item.link_url && (
-                <TouchableOpacity onPress={handleOpenLink} hitSlop={8}>
-                  <Feather name="external-link" size={16} color={Theme.colors.accent} />
+          {(isOwn || !!item.link_url) && (
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>link</Text>
+              {isOwn ? (
+                <View style={styles.linkRow}>
+                  <TextInput
+                    style={[styles.fieldInput, { flex: 1 }]}
+                    value={editLink}
+                    onChangeText={setEditLink}
+                    onBlur={() => save({ link_url: editLink.trim() || null })}
+                    placeholder=""
+                    placeholderTextColor={Theme.colors.disabled}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                    returnKeyType="done"
+                    submitBehavior="blurAndSubmit"
+                  />
+                  {!!item.link_url && (
+                    <TouchableOpacity onPress={handleOpenLink} hitSlop={8}>
+                      <Feather name="external-link" size={16} color={Theme.colors.accent} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ) : (
+                <TouchableOpacity onPress={handleOpenLink} activeOpacity={0.7}>
+                  <Text style={[styles.fieldInput, { color: Theme.colors.accent }]} numberOfLines={1}>
+                    {item.link_url}
+                  </Text>
                 </TouchableOpacity>
               )}
             </View>
-          </View>
+          )}
 
           {/* Worn in */}
           <View style={styles.wornInSection}>
             <View style={styles.wornInHeader}>
               <Text style={styles.wornInTitle}>worn in</Text>
-              <TouchableOpacity onPress={() => setWornInEdit(e => !e)} hitSlop={10} activeOpacity={0.7}>
-                <Text style={styles.wornInEditBtn}>{wornInEdit ? 'done' : 'edit'}</Text>
-              </TouchableOpacity>
+              {isOwn && (
+                <TouchableOpacity onPress={() => setWornInEdit(e => !e)} hitSlop={10} activeOpacity={0.7}>
+                  <Text style={styles.wornInEditBtn}>{wornInEdit ? 'done' : 'edit'}</Text>
+                </TouchableOpacity>
+              )}
             </View>
             {(posts.length > 0 || wornInEdit) && (
               <View style={styles.wornInGrid}>
@@ -438,7 +501,7 @@ export default function WardrobeItemScreen() {
                   <TouchableOpacity
                     key={post.id}
                     style={styles.wornInThumb}
-                    onPress={() => router.push({ pathname: '/entry/[date]' as any, params: { date: post.date } })}
+                    onPress={() => router.push({ pathname: '/entry/[date]' as any, params: { date: post.date, ...(isOwn ? {} : { userId: item.user_id }) } })}
                     activeOpacity={0.82}
                   >
                     <Image source={{ uri: post.photo_url }} style={styles.wornInImg} resizeMode="cover" />
@@ -457,17 +520,19 @@ export default function WardrobeItemScreen() {
             )}
           </View>
 
-          {/* Merge */}
-          <TouchableOpacity onPress={handleOpenMerge} activeOpacity={0.75} style={styles.mergeActionBtnWrap}>
-            <LinearGradient colors={['#F9C74F', '#F77FAD']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.mergeActionBtn}>
-              <Text style={styles.mergeActionText}>merge with another item</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-
-          {/* Remove */}
-          <TouchableOpacity style={styles.removeBtn} onPress={handleDelete} activeOpacity={0.7} hitSlop={12}>
-            <Feather name="trash-2" size={18} color={Theme.colors.accent} />
-          </TouchableOpacity>
+          {/* Merge + Remove — own only */}
+          {isOwn && (
+            <>
+              <TouchableOpacity onPress={handleOpenMerge} activeOpacity={0.75} style={styles.mergeActionBtnWrap}>
+                <LinearGradient colors={['#F9C74F', '#F77FAD']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.mergeActionBtn}>
+                  <Text style={styles.mergeActionText}>merge with another item</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.removeBtn} onPress={handleDelete} activeOpacity={0.7} hitSlop={12}>
+                <Feather name="trash-2" size={18} color={Theme.colors.accent} />
+              </TouchableOpacity>
+            </>
+          )}
 
         </ScrollView>
       </KeyboardAvoidingView>

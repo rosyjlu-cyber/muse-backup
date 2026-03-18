@@ -610,7 +610,7 @@ export default function AddScreen() {
           {/* Scrollable content fills remaining space */}
           {allWardrobeItems.length === 0 ? (
             <View style={styles.itemPickerEmpty}>
-              <Text style={styles.itemPickerEmptyText}>no wardrobe items yet — add a look first to start building your wardrobe</Text>
+              <Text style={styles.itemPickerEmptyText}>your closet is empty — log your first look to start building 👀</Text>
             </View>
           ) : (
             <FlatList

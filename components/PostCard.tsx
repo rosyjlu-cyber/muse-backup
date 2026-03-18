@@ -31,11 +31,13 @@ interface PostCardProps {
   post: Post;
   onPress: () => void;
   onLike?: (post: Post) => void;
+  onSave?: (post: Post) => void;
   onComment?: (postId: string, content: string, parentCommentId?: string) => Promise<void>;
   onAuthorPress?: () => void;
+  onUserPress?: (userId: string) => void;
 }
 
-export function PostCard({ post, onPress, onLike, onComment, onAuthorPress }: PostCardProps) {
+export function PostCard({ post, onPress, onLike, onSave, onComment, onAuthorPress, onUserPress }: PostCardProps) {
   const { session } = useAuth();
   const username = post.profile?.username ?? 'unknown';
   const avatarLetter = (post.profile?.display_name ?? username)[0].toUpperCase();
@@ -178,22 +180,40 @@ export function PostCard({ post, onPress, onLike, onComment, onAuthorPress }: Po
     }
   });
 
+  const navigateToUser = (userId: string) => {
+    closeComments();
+    setShowLikersPanel(false);
+    setTimeout(() => onUserPress?.(userId), 300);
+  };
+
   const renderCommentItem = (c: Comment, isReply: boolean, topLevelId: string, topLevelUsername: string) => (
     <View style={isReply ? styles.replyRow : styles.commentRow}>
-      {c.profile?.avatar_url ? (
-        <Image
-          source={{ uri: c.profile.avatar_url }}
-          style={isReply ? styles.replyAvatar : styles.commentAvatar}
-        />
-      ) : (
-        <View style={isReply ? styles.replyAvatarPlaceholder : styles.commentAvatarPlaceholder}>
-          <Text style={styles.commentAvatarInitial}>
-            {(c.profile?.display_name ?? c.profile?.username ?? '?')[0].toUpperCase()}
-          </Text>
-        </View>
-      )}
+      <TouchableOpacity
+        onPress={() => c.user_id && navigateToUser(c.user_id)}
+        disabled={!onUserPress || !c.user_id}
+        activeOpacity={0.7}
+      >
+        {c.profile?.avatar_url ? (
+          <Image
+            source={{ uri: c.profile.avatar_url }}
+            style={isReply ? styles.replyAvatar : styles.commentAvatar}
+          />
+        ) : (
+          <View style={isReply ? styles.replyAvatarPlaceholder : styles.commentAvatarPlaceholder}>
+            <Text style={styles.commentAvatarInitial}>
+              {(c.profile?.display_name ?? c.profile?.username ?? '?')[0].toUpperCase()}
+            </Text>
+          </View>
+        )}
+      </TouchableOpacity>
       <View style={{ flex: 1 }}>
-        <Text style={styles.commentAuthor}>@{c.profile?.username ?? 'unknown'}</Text>
+        <TouchableOpacity
+          onPress={() => c.user_id && navigateToUser(c.user_id)}
+          disabled={!onUserPress || !c.user_id}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.commentAuthor}>@{c.profile?.username ?? 'unknown'}</Text>
+        </TouchableOpacity>
         <Text style={styles.commentText}>{c.content}</Text>
         <View style={styles.commentActions}>
           {session && (
@@ -306,6 +326,21 @@ export function PostCard({ post, onPress, onLike, onComment, onAuthorPress }: Po
         >
           <Ionicons name="paper-plane-outline" size={23} color='rgba(0,0,0,0.38)' />
         </TouchableOpacity>
+
+        {onSave && (
+          <TouchableOpacity
+            style={[styles.footerBtn, { marginLeft: 'auto' }]}
+            onPress={() => onSave(post)}
+            hitSlop={8}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name={post.saved_by_me ? 'bookmark' : 'bookmark-outline'}
+              size={23}
+              color={post.saved_by_me ? Theme.colors.brandWarm : 'rgba(0,0,0,0.38)'}
+            />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Comments panel */}
@@ -437,7 +472,13 @@ export function PostCard({ post, onPress, onLike, onComment, onAuthorPress }: Po
             ) : (
               <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 300 }}>
                 {likers.map(p => (
-                  <View key={p.id} style={styles.likerRow}>
+                  <TouchableOpacity
+                    key={p.id}
+                    style={styles.likerRow}
+                    onPress={() => navigateToUser(p.id)}
+                    disabled={!onUserPress}
+                    activeOpacity={0.7}
+                  >
                     {p.avatar_url ? (
                       <Image source={{ uri: p.avatar_url }} style={styles.likerAvatar} />
                     ) : (
@@ -451,7 +492,7 @@ export function PostCard({ post, onPress, onLike, onComment, onAuthorPress }: Po
                       <Text style={styles.likerName}>{p.display_name ?? p.username}</Text>
                       <Text style={styles.likerUsername}>@{p.username}</Text>
                     </View>
-                  </View>
+                  </TouchableOpacity>
                 ))}
               </ScrollView>
             )}

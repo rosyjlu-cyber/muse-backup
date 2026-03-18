@@ -14,7 +14,7 @@ import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { Theme } from '@/constants/Theme';
-import { getFeed, getMyCommunities, likePost, unlikePost, addComment, Post, Community, FeedFilters } from '@/utils/api';
+import { getFeed, getMyCommunities, likePost, unlikePost, savePost, unsavePost, addComment, Post, Community, FeedFilters } from '@/utils/api';
 import { useAuth } from '@/utils/auth';
 import { PostCard } from '@/components/PostCard';
 import { FeedFiltersBar } from '@/components/FeedFilters';
@@ -96,6 +96,14 @@ export default function FeedScreen() {
       });
   };
 
+  const handleSave = (post: Post) => {
+    const saved = post.saved_by_me ?? false;
+    setPosts(prev => prev.map(p => p.id === post.id ? { ...p, saved_by_me: !saved } : p));
+    (saved ? unsavePost(post.id) : savePost(post.id)).catch(() => {
+      setPosts(prev => prev.map(p => p.id === post.id ? { ...p, saved_by_me: saved } : p));
+    });
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor={Theme.colors.background} />
@@ -136,12 +144,20 @@ export default function FeedScreen() {
             post={item}
             onPress={() => handlePostPress(item)}
             onLike={handleLike}
+            onSave={handleSave}
             onComment={handleComment}
             onAuthorPress={() => {
               if (item.user_id === session?.user?.id) {
                 router.push('/profile' as any);
               } else {
                 router.push({ pathname: '/profile/[userId]' as any, params: { userId: item.user_id } });
+              }
+            }}
+            onUserPress={(userId) => {
+              if (userId === session?.user?.id) {
+                router.push('/profile' as any);
+              } else {
+                router.push({ pathname: '/profile/[userId]' as any, params: { userId } });
               }
             }}
           />

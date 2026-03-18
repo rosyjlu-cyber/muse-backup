@@ -56,7 +56,7 @@ const BLOB_W = Math.round(BLOB_H * (277 / 477));
 const BLOB_BIG_H = Math.round(SH * 0.74);
 const BLOB_BIG_W = Math.round(BLOB_BIG_H * (277 / 477));
 
-type Step = 'welcome' | 'phone' | 'otp' | 'setup' | 'contacts' | 'community' | 'notifications' | 'done';
+type Step = 'welcome' | 'phone' | 'otp' | 'setup' | 'contacts' | 'community' | 'terms' | 'notifications' | 'done';
 
 const COUNTRY_CODES = [
   { code: '+1',  label: 'United States (+1)' },
@@ -182,13 +182,31 @@ export default function OnboardingScreen() {
   const fullPhone = `${countryCode}${phoneNumber.replace(/\D/g, '')}`;
 
   const completeOnboarding = async () => {
+    // New users: write profile now (deferred from setup step)
+    if (displayName.trim()) {
+      setSavingProfile(true);
+      try {
+        const uid = session?.user.id;
+        if (uid) {
+          const updates: any = { display_name: displayName.trim(), username: username.toLowerCase(), birth_date: birthDate?.toISOString().split('T')[0], is_public: isPublic };
+          if (bio.trim()) updates.bio = bio.trim();
+          if (location.trim()) updates.location = location.trim();
+          if (styleTags.length > 0) updates.style_tags = styleTags;
+          await updateProfile(uid, updates);
+          if (avatarUri) {
+            try { const url = await uploadAvatar(uid, avatarUri); await updateProfile(uid, { avatar_url: url }); } catch {}
+          }
+        }
+      } catch (e: any) { showError(e?.message ?? 'could not save profile'); setSavingProfile(false); return; }
+      setSavingProfile(false);
+    }
     await refreshProfile();
     await AsyncStorage.setItem('muse_onboarding_done', 'true');
     router.replace('/(tabs)' as any);
   };
 
   const goBack = () => {
-    const order: Step[] = ['welcome', 'phone', 'otp', 'setup', 'contacts', 'community', 'notifications', 'done'];
+    const order: Step[] = ['welcome', 'phone', 'otp', 'setup', 'contacts', 'community', 'terms', 'notifications', 'done'];
     const idx = order.indexOf(step);
     if (idx > 0) setStep(order[idx - 1]);
   };
@@ -278,30 +296,14 @@ export default function OnboardingScreen() {
     setCustomTagInput('');
   };
 
-  const handleSaveSetup = async () => {
+  const handleSaveSetup = () => {
     if (!displayName.trim()) { showError('please enter your name'); return; }
     if (username.length < 3) { showError('username must be at least 3 characters'); return; }
     if (usernameStatus === 'taken') { showError('that username is taken'); return; }
     if (usernameStatus === 'checking') return;
     if (!birthDate) { showError('please enter your date of birth'); return; }
     if (getAge(birthDate) < 13) { showError('you must be 13 or older to use muse'); return; }
-    setSavingProfile(true);
-    try {
-      const uid = session?.user.id; if (!uid) return;
-      const updates: any = { display_name: displayName.trim(), username: username.toLowerCase(), birth_date: birthDate.toISOString().split('T')[0], is_public: isPublic };
-      if (bio.trim()) updates.bio = bio.trim();
-      if (location.trim()) updates.location = location.trim();
-      if (styleTags.length > 0) updates.style_tags = styleTags;
-      await updateProfile(uid, updates);
-      if (avatarUri) {
-        try {
-          const url = await uploadAvatar(uid, avatarUri);
-          await updateProfile(uid, { avatar_url: url });
-        } catch {}
-      }
-      setStep('contacts');
-    } catch (e: any) { showError(e?.message ?? 'could not save'); }
-    finally { setSavingProfile(false); }
+    setStep('contacts');
   };
 
   // ─── Notifications ────────────────────────────────────────────────────────
@@ -318,7 +320,7 @@ export default function OnboardingScreen() {
     setContactsLoading(true);
     try {
       const Contacts = await import('expo-contacts').catch(() => null);
-      if (!Contacts) { setContactsPermission('denied'); return; }
+      if (!Contacts || typeof Contacts.requestPermissionsAsync !== 'function') { setContactsPermission('denied'); return; }
       const { status } = await Contacts.requestPermissionsAsync();
       if (status !== 'granted') { setContactsPermission('denied'); return; }
       setContactsPermission('granted');
@@ -534,7 +536,7 @@ export default function OnboardingScreen() {
 
   // ─── SETUP ────────────────────────────────────────────────────────────────
   if (step === 'setup') {
-    const canContinue = displayName.trim().length > 0 && username.length >= 3 && usernameStatus === 'available' && !savingProfile && birthDate !== null && getAge(birthDate) >= 13;
+    const canContinue = displayName.trim().length > 0 && username.length >= 3 && usernameStatus === 'available' && birthDate !== null && getAge(birthDate) >= 13;
     return (
       <StepShell current="setup" canGoBack={false} onBack={goBack}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
@@ -903,7 +905,7 @@ export default function OnboardingScreen() {
               </TouchableOpacity>
             </>
           ) : createdCommunity || joinedIds.size > 0 ? (
-            <GradBtn onPress={() => setStep('notifications')} disabled={false} loading={false} label="continue" />
+            <GradBtn onPress={() => setStep('terms')} disabled={false} loading={false} label="continue" />
           ) : (
             <>
               <TouchableOpacity onPress={() => setShowCreateCommunity(true)} activeOpacity={0.85}>
@@ -914,7 +916,7 @@ export default function OnboardingScreen() {
                   </View>
                 </LinearGradient>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setStep('notifications')} hitSlop={12} style={{ marginTop: 16, alignSelf: 'center' }}>
+              <TouchableOpacity onPress={() => setStep('terms')} hitSlop={12} style={{ marginTop: 16, alignSelf: 'center' }}>
                 <Text style={styles.skipText}>skip for now</Text>
               </TouchableOpacity>
             </>
@@ -925,49 +927,60 @@ export default function OnboardingScreen() {
     );
   }
 
-  // ─── NOTIFICATIONS ────────────────────────────────────────────────────────
-  if (step === 'notifications') {
+  // ─── TERMS ────────────────────────────────────────────────────────────────
+  if (step === 'terms') {
     const termsOk = agreedToTerms && agreedToPrivacy;
     return (
-      <StepShell current="notifications" onBack={goBack}>
+      <StepShell current="terms" onBack={goBack}>
         <View style={styles.stepContent}>
-          <Text style={styles.stepTitle}>never miss{'\n'}a day.</Text>
-          <Text style={styles.stepSub}>get a gentle reminder to log your look each day</Text>
-
-          <View style={styles.notifPreview}>
-            <View style={styles.notifCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <View style={styles.notifAppIcon} />
-                <Text style={styles.notifAppName}>muse</Text>
-              </View>
-              <Text style={styles.notifBody}>time to capture today's look ✨</Text>
-            </View>
-          </View>
-
-          {/* T&C */}
+          <Text style={styles.stepTitle}>before you{'\n'}dive in.</Text>
+          <Text style={styles.stepSub}>just a couple of things to agree to</Text>
           <View style={styles.termsSection}>
             <TouchableOpacity style={styles.checkRow} onPress={() => setAgreedToTerms(v => !v)} activeOpacity={0.7}>
               <View style={[styles.checkbox, agreedToTerms && styles.checkboxChecked]}>
                 {agreedToTerms && <Ionicons name="checkmark" size={12} color="#fff" />}
               </View>
-              <Text style={styles.checkLabel}>I agree to the{' '}
-                <Text style={styles.checkLink} onPress={() => Linking.openURL('https://example.com/terms')}>Terms of Service</Text>
+              <Text style={styles.checkLabel}>i agree to the{' '}
+                <Text style={styles.checkLink} onPress={() => Linking.openURL('https://bemymuse.app/terms')}>terms of service</Text>
               </Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.checkRow} onPress={() => setAgreedToPrivacy(v => !v)} activeOpacity={0.7}>
               <View style={[styles.checkbox, agreedToPrivacy && styles.checkboxChecked]}>
                 {agreedToPrivacy && <Ionicons name="checkmark" size={12} color="#fff" />}
               </View>
-              <Text style={styles.checkLabel}>I agree to the{' '}
-                <Text style={styles.checkLink} onPress={() => Linking.openURL('https://example.com/privacy')}>Privacy Policy</Text>
+              <Text style={styles.checkLabel}>i agree to the{' '}
+                <Text style={styles.checkLink} onPress={() => Linking.openURL('https://bemymuse.app/conditions')}>privacy policy</Text>
               </Text>
             </TouchableOpacity>
           </View>
         </View>
         <View style={styles.stepFooter}>
-          <GradBtn onPress={handleRequestNotifications} disabled={!termsOk} loading={false} label="turn on reminders" />
-          <TouchableOpacity onPress={() => { if (termsOk) setStep('done'); }} hitSlop={8} style={{ alignItems: 'center', marginTop: 14 }}>
-            <Text style={[styles.skipText, !termsOk && { opacity: 0.35 }]}>skip for now</Text>
+          <GradBtn onPress={() => setStep('notifications')} disabled={!termsOk} loading={false} label="continue" />
+        </View>
+      </StepShell>
+    );
+  }
+
+  // ─── NOTIFICATIONS ────────────────────────────────────────────────────────
+  if (step === 'notifications') {
+    return (
+      <StepShell current="notifications" onBack={goBack}>
+        <View style={styles.stepContent}>
+          <Text style={styles.stepTitle}>never miss{'\n'}a day.</Text>
+          <Text style={styles.stepSub}>get a gentle reminder to log your look each day</Text>
+          <View style={styles.notifPreview}>
+            <View style={styles.notifCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <Text style={styles.notifAppIcon}>muse</Text>
+              </View>
+              <Text style={styles.notifBody}>time to capture today's look ✨</Text>
+            </View>
+          </View>
+        </View>
+        <View style={styles.stepFooter}>
+          <GradBtn onPress={handleRequestNotifications} disabled={false} loading={false} label="turn on reminders" />
+          <TouchableOpacity onPress={() => setStep('done')} hitSlop={8} style={{ alignItems: 'center', marginTop: 14 }}>
+            <Text style={styles.skipText}>skip for now</Text>
           </TouchableOpacity>
         </View>
       </StepShell>
@@ -982,8 +995,8 @@ export default function OnboardingScreen() {
         <SafeAreaView style={{ flex: 1 }}>
           <View style={styles.doneRoot}>
             {/* Mini blob */}
-            <View style={{ width: BLOB_W * 0.7, height: BLOB_H * 0.7, marginBottom: 32 }}>
-              <Svg width={BLOB_W * 0.7} height={BLOB_H * 0.7} viewBox="0 0 277 477" preserveAspectRatio="none" style={StyleSheet.absoluteFill}>
+            <View style={{ width: BLOB_W * 0.9, height: BLOB_H * 0.9, marginBottom: 18 }}>
+              <Svg width={BLOB_W * 0.9} height={BLOB_H * 0.9} viewBox="0 0 277 477" preserveAspectRatio="none" style={StyleSheet.absoluteFill}>
                 <Defs>
                   <SvgGradient id="donebg" x1="20%" y1="0%" x2="80%" y2="100%">
                     <Stop offset="0%" stopColor="#CCE0EE" />
@@ -997,12 +1010,13 @@ export default function OnboardingScreen() {
               </View>
             </View>
 
-            <Text style={styles.doneWordmark}>muse</Text>
-            {username && <Text style={styles.doneUsername}>@{username}</Text>}
-            <Text style={styles.doneSub}>start capturing your daily looks{'\n'}and share them with your community.</Text>
-            <TouchableOpacity onPress={completeOnboarding} activeOpacity={0.88} style={{ width: '80%' }}>
+            <View style={{ alignItems: 'center', gap: 2 }}>
+              <Text style={styles.doneWordmark}>muse</Text>
+              {username && <Text style={styles.doneUsername}>@{username}</Text>}
+            </View>
+            <TouchableOpacity onPress={completeOnboarding} activeOpacity={0.88} style={{ width: '80%', marginTop: 20 }} disabled={savingProfile}>
               <LinearGradient colors={ACCENT_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.doneCTA}>
-                <Text style={styles.doneCTAText}>start journaling</Text>
+                {savingProfile ? <ActivityIndicator color="#fff" /> : <Text style={styles.doneCTAText}>add your first look</Text>}
               </LinearGradient>
             </TouchableOpacity>
           </View>
@@ -1015,14 +1029,21 @@ export default function OnboardingScreen() {
 }
 
 // ─── Step shell helpers (must live outside OnboardingScreen to keep stable refs) ──
-const FLOW_STEPS: Step[] = ['phone', 'otp', 'setup', 'contacts', 'community', 'notifications'];
+const VERIFY_STEPS: Step[] = ['phone', 'otp'];
+const SETUP_STEPS: Step[]  = ['setup', 'contacts', 'community', 'terms', 'notifications'];
 
 function renderProgress(current: Step) {
-  const idx = FLOW_STEPS.indexOf(current);
-  if (idx < 0) return null;
+  const verifyIdx = VERIFY_STEPS.indexOf(current);
+  const setupIdx  = SETUP_STEPS.indexOf(current);
+  const [steps, idx] = verifyIdx >= 0
+    ? [VERIFY_STEPS, verifyIdx]
+    : setupIdx >= 0
+      ? [SETUP_STEPS, setupIdx]
+      : [null, -1];
+  if (!steps) return null;
   return (
     <View style={styles.progressRow}>
-      {FLOW_STEPS.map((_, i) => (
+      {steps.map((_, i) => (
         <View key={i} style={[styles.progressDot, i <= idx && styles.progressDotActive]} />
       ))}
     </View>
@@ -1298,7 +1319,7 @@ const styles = StyleSheet.create({
     width: '100%', backgroundColor: Theme.colors.surface,
     borderRadius: Theme.radius.md, borderWidth: 1, borderColor: Theme.colors.border, padding: 16,
   },
-  notifAppIcon: { width: 20, height: 20, borderRadius: 5, backgroundColor: Theme.colors.accent },
+  notifAppIcon: { fontFamily: Theme.font.brand, fontSize: 15, color: Theme.colors.brandWarm },
   notifAppName: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.primary },
   notifBody: { fontSize: Theme.font.sm, color: Theme.colors.secondary },
   skipText: { fontSize: Theme.font.sm, color: Theme.colors.disabled, fontWeight: '500' },
@@ -1337,7 +1358,7 @@ const styles = StyleSheet.create({
     fontFamily: Theme.font.brand,
     fontSize: 52, color: Theme.colors.brandWarm, letterSpacing: -1,
   },
-  doneUsername: { fontSize: Theme.font.base, fontWeight: '700', color: Theme.colors.secondary },
+  doneUsername: { fontSize: Theme.font.base, fontWeight: '700', color: Theme.colors.accent },
   doneSub: {
     fontSize: Theme.font.sm, color: Theme.colors.secondary,
     textAlign: 'center', lineHeight: 22, marginBottom: 12,

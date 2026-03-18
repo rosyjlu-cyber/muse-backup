@@ -113,6 +113,7 @@ interface Props {
   userId: string;
   onItemPress: (id: string) => void;
   onLogOutfit?: () => void;
+  readOnly?: boolean;
 }
 
 const PREDEFINED_CATS = ['top', 'bottom', 'dress', 'outerwear', 'shoes', 'bag', 'accessory'];
@@ -164,7 +165,7 @@ const reorderLabelStyle: object = {
   fontSize: 15, color: Theme.colors.primary, fontWeight: '500',
 };
 
-export function WardrobeGrid({ userId, onItemPress, onLogOutfit }: Props) {
+export function WardrobeGrid({ userId, onItemPress, onLogOutfit, readOnly = false }: Props) {
   const [items, setItems] = useState<WardrobeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -528,7 +529,7 @@ export function WardrobeGrid({ userId, onItemPress, onLogOutfit }: Props) {
         )}
 
         {/* Suggestion banner */}
-        {items.length > 0 && suggestions.length > 0 && (
+        {!readOnly && items.length > 0 && suggestions.length > 0 && (
           <TouchableOpacity
             style={styles.suggestionBanner}
             onPress={() => { setReviewSuggestion(suggestions[0]); setReviewVisible(true); }}
@@ -547,15 +548,21 @@ export function WardrobeGrid({ userId, onItemPress, onLogOutfit }: Props) {
         {/* Empty state */}
         {items.length === 0 ? (
           <View style={styles.empty}>
-            <TouchableOpacity style={styles.logOutfitBtn} onPress={onLogOutfit} activeOpacity={0.75}>
-              <Feather name="zap" size={13} color={Theme.colors.limeMuted} />
-              <Text style={styles.logOutfitText}>log outfit to auto-identify</Text>
-            </TouchableOpacity>
+            {readOnly ? (
+              <Text style={styles.noMatchText}>no items yet</Text>
+            ) : (
+              <TouchableOpacity onPress={onLogOutfit} activeOpacity={0.75} style={styles.logOutfitBtnWrap}>
+                <LinearGradient colors={['#F9C74F', '#F77FAD']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.logOutfitBtn}>
+                  <Feather name="zap" size={13} color={Theme.colors.primary} />
+                  <Text style={styles.logOutfitText}>log outfit to add items</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
           </View>
         ) : withImages.length === 0 ? (
           <View style={styles.center}>
             <ActivityIndicator size="small" color={Theme.colors.limeText} style={{ marginBottom: 8 }} />
-            <Text style={styles.noMatchText}>building your wardrobe...</Text>
+            <Text style={styles.noMatchText}>growing your wardrobe...</Text>
           </View>
         ) : filtered.length === 0 ? (
           <View style={styles.center}>
@@ -573,7 +580,7 @@ export function WardrobeGrid({ userId, onItemPress, onLogOutfit }: Props) {
                       key={item.id}
                       style={[styles.cell, { width: cellSize }]}
                       onPress={() => onItemPress(item.id)}
-                      onLongPress={() => handleLongPress(item)}
+                      onLongPress={() => { if (!readOnly) handleLongPress(item); }}
                       activeOpacity={0.82}
                     >
                       {imageUrl ? (
@@ -615,7 +622,7 @@ export function WardrobeGrid({ userId, onItemPress, onLogOutfit }: Props) {
                 ))}
               </View>
             ))}
-            <Text style={styles.autoScanLabel}>log more outfits to grow your closet 👀</Text>
+            {!readOnly && <Text style={styles.autoScanLabel}>log more outfits to grow your closet 👀</Text>}
           </>
         )}
       </View>
@@ -950,14 +957,13 @@ const styles = StyleSheet.create({
 
   // Empty
   empty: { paddingVertical: 40, alignItems: 'center' },
+  logOutfitBtnWrap: { borderRadius: Theme.radius.sm, overflow: 'hidden' },
   logOutfitBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: 10, paddingHorizontal: 16,
-    borderRadius: Theme.radius.sm,
-    borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)',
   },
   logOutfitText: {
-    fontSize: Theme.font.xs, fontWeight: '500', color: Theme.colors.limeMuted,
+    fontSize: Theme.font.xs, fontWeight: '700', color: Theme.colors.primary,
   },
   noMatchText: {
     fontSize: Theme.font.sm, color: Theme.colors.limeMuted,

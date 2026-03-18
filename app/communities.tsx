@@ -17,10 +17,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Theme } from '@/constants/Theme';
 import {
   getAllCommunities,
-  getMyCommunities,
   joinCommunity,
   leaveCommunity,
   createCommunity,
+  sendCommunityRequest,
+  cancelCommunityRequest,
   Community,
 } from '@/utils/api';
 import { useAuth } from '@/utils/auth';
@@ -30,7 +31,6 @@ export default function CommunitiesScreen() {
   const { session } = useAuth();
 
   const [all, setAll] = useState<Community[]>([]);
-  const [myCommunityIds, setMyCommunityIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
@@ -43,32 +43,32 @@ export default function CommunitiesScreen() {
   useFocusEffect(
     useCallback(() => {
       if (!session) return;
-      Promise.all([getAllCommunities(), getMyCommunities()]).then(([all, mine]) => {
-        setAll(all);
-        setMyCommunityIds(new Set(mine.map(c => c.id)));
-      });
+      getAllCommunities().then(setAll);
     }, [session])
   );
 
-  const handleJoin = async (community: Community) => {
-    setLoadingId(community.id);
-    try {
-      await joinCommunity(community.id);
-      setMyCommunityIds(s => new Set([...s, community.id]));
-    } catch (e: any) {
-      Alert.alert('error', e?.message ?? 'could not join');
-    } finally {
-      setLoadingId(null);
-    }
-  };
+  const updateStatus = (id: string, status: Community['join_status']) =>
+    setAll(prev => prev.map(c => c.id === id ? { ...c, join_status: status, is_member: status === 'member' } : c));
 
-  const handleLeave = async (community: Community) => {
+  const handleAction = async (community: Community) => {
+    const status = community.join_status ?? (community.is_member ? 'member' : 'none');
     setLoadingId(community.id);
     try {
-      await leaveCommunity(community.id);
-      setMyCommunityIds(s => { const n = new Set(s); n.delete(community.id); return n; });
+      if (status === 'member') {
+        await leaveCommunity(community.id);
+        updateStatus(community.id, 'none');
+      } else if (status === 'pending') {
+        await cancelCommunityRequest(community.id);
+        updateStatus(community.id, 'none');
+      } else if (community.is_private) {
+        await sendCommunityRequest(community.id);
+        updateStatus(community.id, 'pending');
+      } else {
+        await joinCommunity(community.id);
+        updateStatus(community.id, 'member');
+      }
     } catch (e: any) {
-      Alert.alert('error', e?.message ?? 'could not leave');
+      Alert.alert('error', e?.message ?? 'something went wrong');
     } finally {
       setLoadingId(null);
     }
@@ -83,8 +83,7 @@ export default function CommunitiesScreen() {
         slug: newName.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
         description: newDesc.trim(),
       });
-      setAll(prev => [c, ...prev]);
-      setMyCommunityIds(s => new Set([...s, c.id]));
+      setAll(prev => [{ ...c, join_status: 'member' }, ...prev]);
       setNewName('');
       setNewDesc('');
       setShowCreate(false);
@@ -189,15 +188,23 @@ export default function CommunitiesScreen() {
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
         renderItem={({ item }) => {
-          const isMember = myCommunityIds.has(item.id);
-          const loading = loadingId === item.id;
+          const status = item.join_status ?? (item.is_member ? 'member' : 'none');
+          const busy = loadingId === item.id;
+          const btnLabel = status === 'member' ? 'leave' : status === 'pending' ? 'requested' : 'join';
+          const isMember = status === 'member';
+          const isPending = status === 'pending';
           return (
             <View style={styles.row}>
               <TouchableOpacity
                 style={{ flex: 1 }}
                 onPress={() => router.push({ pathname: '/community/[id]' as any, params: { id: item.id } })}
               >
-                <Text style={styles.communityName}>{item.name}</Text>
+                <View style={styles.nameRow}>
+                  <Text style={styles.communityName}>{item.name}</Text>
+                  {item.is_private && (
+                    <Feather name="lock" size={12} color={Theme.colors.secondary} style={{ marginLeft: 5 }} />
+                  )}
+                </View>
                 {item.description ? (
                   <Text style={styles.communityDesc} numberOfLines={1}>{item.description}</Text>
                 ) : null}
@@ -207,14 +214,22 @@ export default function CommunitiesScreen() {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.actionBtn, isMember && styles.actionBtnLeave, loading && { opacity: 0.5 }]}
-                onPress={() => isMember ? handleLeave(item) : handleJoin(item)}
-                disabled={loading}
+                style={[
+                  styles.actionBtn,
+                  isMember && styles.actionBtnLeave,
+                  isPending && styles.actionBtnPending,
+                  busy && { opacity: 0.5 },
+                ]}
+                onPress={() => handleAction(item)}
+                disabled={busy}
               >
-                {loading
+                {busy
                   ? <ActivityIndicator size="small" color={isMember ? Theme.colors.secondary : Theme.colors.background} />
-                  : <Text style={[styles.actionBtnText, isMember && styles.actionBtnTextLeave]}>
-                      {isMember ? 'leave' : 'join'}
+                  : <Text style={[
+                      styles.actionBtnText,
+                      (isMember || isPending) && styles.actionBtnTextMuted,
+                    ]}>
+                      {btnLabel}
                     </Text>
                 }
               </TouchableOpacity>
@@ -294,20 +309,25 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderBottomWidth: 1, borderBottomColor: Theme.colors.border,
   },
+  nameRow: { flexDirection: 'row', alignItems: 'center' },
   communityName: { fontSize: Theme.font.base, fontWeight: '700', color: Theme.colors.primary },
   communityDesc: { fontSize: Theme.font.xs, color: Theme.colors.secondary, marginTop: 2 },
   memberCount: { fontSize: Theme.font.xs, color: Theme.colors.disabled, marginTop: 2 },
 
   actionBtn: {
     backgroundColor: Theme.colors.accent, borderRadius: 100,
-    paddingHorizontal: 16, paddingVertical: 6, minWidth: 52, alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 6, minWidth: 72, alignItems: 'center',
   },
   actionBtnLeave: {
     backgroundColor: 'transparent',
     borderWidth: 1.5, borderColor: Theme.colors.border,
   },
+  actionBtnPending: {
+    backgroundColor: 'transparent',
+    borderWidth: 1.5, borderColor: Theme.colors.secondary,
+  },
   actionBtnText: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.background },
-  actionBtnTextLeave: { color: Theme.colors.secondary },
+  actionBtnTextMuted: { color: Theme.colors.secondary },
 
   empty: { paddingTop: 40, alignItems: 'center' },
   emptyText: { fontSize: Theme.font.sm, color: Theme.colors.secondary },

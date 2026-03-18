@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import { supabase } from "./supabase";
+import { calculateStreak } from "./dates";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,6 +15,7 @@ export interface Profile {
   location?: string | null;
   style_tags?: string[];
   birth_date?: string | null;
+  share_closet?: boolean;
   followers_count?: number;
   following_count?: number;
   created_at: string;
@@ -30,6 +32,7 @@ export interface Post {
   likes_count?: number;
   comments_count?: number;
   liked_by_me?: boolean;
+  saved_by_me?: boolean;
   created_at: string;
   profile?: Pick<
     Profile,
@@ -59,6 +62,26 @@ export interface Community {
   created_at: string;
   member_count?: number;
   is_member?: boolean;
+  join_status?: 'member' | 'pending' | 'none';
+}
+
+export interface AppNotification {
+  id: string;
+  type: 'like' | 'comment' | 'new_follower' | 'streak' | 'follow_accepted';
+  actor_id: string | null;
+  post_id: string | null;
+  data: Record<string, any>;
+  is_read: boolean;
+  created_at: string;
+  actor?: Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_url'>;
+}
+
+export interface CommunityRequest {
+  id: string;
+  community_id: string;
+  user_id: string;
+  created_at: string;
+  profile: Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_url'>;
 }
 
 export interface WardrobeItem {
@@ -206,6 +229,7 @@ export async function updateProfile(
       | "location"
       | "style_tags"
       | "birth_date"
+      | "share_closet"
     >
   >,
 ) {
@@ -274,6 +298,78 @@ export async function isFollowing(userId: string): Promise<boolean> {
   return !!data;
 }
 
+// ─── Follow Requests ──────────────────────────────────────────────────────────
+
+export async function getFollowStatus(userId: string): Promise<'following' | 'pending' | 'none'> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return 'none';
+  const [{ data: follow }, { data: request }] = await Promise.all([
+    supabase.from('follows').select('follower_id').eq('follower_id', user.id).eq('following_id', userId).maybeSingle(),
+    supabase.from('follow_requests').select('id').eq('requester_id', user.id).eq('requested_id', userId).maybeSingle(),
+  ]);
+  if (follow) return 'following';
+  if (request) return 'pending';
+  return 'none';
+}
+
+export async function sendFollowRequest(userId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('not logged in');
+  const { error } = await supabase.from('follow_requests').insert({ requester_id: user.id, requested_id: userId });
+  if (error) throw error;
+}
+
+export async function cancelFollowRequest(userId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('not logged in');
+  const { error } = await supabase.from('follow_requests').delete().eq('requester_id', user.id).eq('requested_id', userId);
+  if (error) throw error;
+}
+
+export interface FollowRequest {
+  id: string;
+  requester_id: string;
+  created_at: string;
+  profile: Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_url'>;
+}
+
+export async function getPendingFollowRequests(): Promise<FollowRequest[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+  const { data: rows, error } = await supabase
+    .from('follow_requests')
+    .select('id, requester_id, created_at')
+    .eq('requested_id', user.id)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  if (!rows || rows.length === 0) return [];
+
+  const requesterIds = rows.map(r => r.requester_id);
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, username, display_name, avatar_url')
+    .in('id', requesterIds);
+  const profileMap = Object.fromEntries((profiles ?? []).map(p => [p.id, p]));
+
+  return rows.map(r => ({ ...r, profile: profileMap[r.requester_id] ?? { id: r.requester_id, username: 'unknown', display_name: null, avatar_url: null } }));
+}
+
+export async function resolveFollowRequest(requesterId: string, accept: boolean): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('not logged in');
+  if (accept) {
+    const { error } = await supabase.from('follows').insert({ follower_id: requesterId, following_id: user.id });
+    if (error) throw error;
+    // notify the requester that their follow was accepted
+    await supabase.from('notifications').insert({
+      user_id: requesterId,
+      type: 'follow_accepted',
+      actor_id: user.id,
+    });
+  }
+  await supabase.from('follow_requests').delete().eq('requester_id', requesterId).eq('requested_id', user.id);
+}
+
 // ─── Posts ────────────────────────────────────────────────────────────────────
 
 export async function getMyPosts(): Promise<Post[]> {
@@ -306,13 +402,13 @@ export async function getPostsByUser(userId: string): Promise<Post[]> {
   const posts = (data ?? []) as Post[];
   if (user && posts.length > 0) {
     const postIds = posts.map((p) => p.id);
-    const { data: likedRows } = await supabase
-      .from("likes")
-      .select("post_id")
-      .eq("user_id", user.id)
-      .in("post_id", postIds);
+    const [{ data: likedRows }, { data: savedRows }] = await Promise.all([
+      supabase.from("likes").select("post_id").eq("user_id", user.id).in("post_id", postIds),
+      supabase.from("saves").select("post_id").eq("user_id", user.id).in("post_id", postIds),
+    ]);
     const likedSet = new Set((likedRows ?? []).map((r: any) => r.post_id));
-    return posts.map((p) => ({ ...p, liked_by_me: likedSet.has(p.id) }));
+    const savedSet = new Set((savedRows ?? []).map((r: any) => r.post_id));
+    return posts.map((p) => ({ ...p, liked_by_me: likedSet.has(p.id), saved_by_me: savedSet.has(p.id) }));
   }
   return posts;
 }
@@ -376,7 +472,22 @@ export async function upsertPost(
     .select()
     .single();
   if (error) throw error;
+  checkStreakMilestone(user.id).catch(() => {});
   return data as Post;
+}
+
+async function checkStreakMilestone(userId: string): Promise<void> {
+  const { data: posts } = await supabase.from('posts').select('date').eq('user_id', userId);
+  const streak = calculateStreak(posts ?? []);
+  const isMilestone =
+    (streak >= 2 && streak <= 10) ||
+    (streak > 10 && streak <= 100 && streak % 5 === 0) ||
+    (streak > 100 && streak % 10 === 0);
+  if (isMilestone) {
+    await supabase.from('notifications').insert({
+      user_id: userId, type: 'streak', data: { count: streak },
+    });
+  }
 }
 
 export async function updatePostMeta(
@@ -454,17 +565,17 @@ export async function getFeed(filters: FeedFilters = {}): Promise<Post[]> {
   );
   if (user && posts.length > 0) {
     const postIds = posts.map((p) => p.id);
-    const { data: likedRows, error: likesErr } = await supabase
-      .from("likes")
-      .select("post_id")
-      .eq("user_id", user.id)
-      .in("post_id", postIds);
+    const [{ data: likedRows, error: likesErr }, { data: savedRows }] = await Promise.all([
+      supabase.from("likes").select("post_id").eq("user_id", user.id).in("post_id", postIds),
+      supabase.from("saves").select("post_id").eq("user_id", user.id).in("post_id", postIds),
+    ]);
     if (likesErr) {
       console.warn("liked_by_me fetch error:", likesErr.message);
       return posts;
     }
     const likedSet = new Set((likedRows ?? []).map((r: any) => r.post_id));
-    return posts.map((p) => ({ ...p, liked_by_me: likedSet.has(p.id) }));
+    const savedSet = new Set((savedRows ?? []).map((r: any) => r.post_id));
+    return posts.map((p) => ({ ...p, liked_by_me: likedSet.has(p.id), saved_by_me: savedSet.has(p.id) }));
   }
   return posts;
 }
@@ -496,17 +607,16 @@ export async function getAllCommunities(): Promise<Community[]> {
 
   if (!user || !data) return (data ?? []) as Community[];
 
-  // Mark which ones the user is already a member of
-  const { data: memberships } = await supabase
-    .from("community_members")
-    .select("community_id")
-    .eq("user_id", user.id);
-  const memberSet = new Set(
-    (memberships ?? []).map((m: any) => m.community_id),
-  );
+  const [{ data: memberships }, { data: requests }] = await Promise.all([
+    supabase.from("community_members").select("community_id").eq("user_id", user.id),
+    supabase.from("community_requests").select("community_id").eq("user_id", user.id),
+  ]);
+  const memberSet = new Set((memberships ?? []).map((m: any) => m.community_id));
+  const pendingSet = new Set((requests ?? []).map((r: any) => r.community_id));
   return data.map((c) => ({
     ...c,
     is_member: memberSet.has(c.id),
+    join_status: memberSet.has(c.id) ? 'member' : pendingSet.has(c.id) ? 'pending' : 'none',
   })) as Community[];
 }
 
@@ -629,17 +739,17 @@ export async function getCommunityPosts(communityId: string): Promise<Post[]> {
   );
   if (user && posts.length > 0) {
     const postIds = posts.map((p) => p.id);
-    const { data: likedRows, error: likesErr } = await supabase
-      .from("likes")
-      .select("post_id")
-      .eq("user_id", user.id)
-      .in("post_id", postIds);
+    const [{ data: likedRows, error: likesErr }, { data: savedRows }] = await Promise.all([
+      supabase.from("likes").select("post_id").eq("user_id", user.id).in("post_id", postIds),
+      supabase.from("saves").select("post_id").eq("user_id", user.id).in("post_id", postIds),
+    ]);
     if (likesErr) {
       console.warn("liked_by_me fetch error:", likesErr.message);
       return posts;
     }
     const likedSet = new Set((likedRows ?? []).map((r: any) => r.post_id));
-    return posts.map((p) => ({ ...p, liked_by_me: likedSet.has(p.id) }));
+    const savedSet = new Set((savedRows ?? []).map((r: any) => r.post_id));
+    return posts.map((p) => ({ ...p, liked_by_me: likedSet.has(p.id), saved_by_me: savedSet.has(p.id) }));
   }
   return posts;
 }
@@ -668,6 +778,96 @@ export async function unlikePost(postId: string): Promise<void> {
     .eq("post_id", postId)
     .eq("user_id", user.id);
   if (error) throw error;
+}
+
+// ─── Saves ────────────────────────────────────────────────────────────────────
+
+export async function savePost(postId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("not logged in");
+  const { error } = await supabase.from("saves").insert({ post_id: postId, user_id: user.id });
+  if (error) throw error;
+}
+
+export async function unsavePost(postId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("not logged in");
+  const { error } = await supabase.from("saves").delete().eq("post_id", postId).eq("user_id", user.id);
+  if (error) throw error;
+}
+
+export async function getSavedPosts(): Promise<Post[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+  const { data: saveRows, error } = await supabase
+    .from("saves")
+    .select("post_id, created_at")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false });
+  if (error || !saveRows || saveRows.length === 0) return [];
+  const postIds = saveRows.map((r: any) => r.post_id);
+  const { data, error: postsErr } = await supabase
+    .from("posts")
+    .select("*, profile:profiles!posts_user_id_fkey(username, display_name, avatar_url, is_public)")
+    .in("id", postIds)
+    .eq("is_private", false);
+  if (postsErr) throw postsErr;
+  const posts = (data ?? []) as Post[];
+  // Attach liked_by_me and saved_by_me
+  const { data: likedRows } = await supabase.from("likes").select("post_id").eq("user_id", user.id).in("post_id", postIds);
+  const likedSet = new Set((likedRows ?? []).map((r: any) => r.post_id));
+  const savedSet = new Set(postIds);
+  // Preserve save order
+  const orderMap = new Map(saveRows.map((r: any, i: number) => [r.post_id, i]));
+  return posts
+    .map((p) => ({ ...p, liked_by_me: likedSet.has(p.id), saved_by_me: savedSet.has(p.id) }))
+    .sort((a, b) => (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0));
+}
+
+export async function saveWardrobeItem(itemId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("not logged in");
+  const { error } = await supabase.from("saved_wardrobe_items").insert({ item_id: itemId, user_id: user.id });
+  if (error) throw error;
+}
+
+export async function unsaveWardrobeItem(itemId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("not logged in");
+  const { error } = await supabase.from("saved_wardrobe_items").delete().eq("item_id", itemId).eq("user_id", user.id);
+  if (error) throw error;
+}
+
+export async function getSavedWardrobeItems(): Promise<WardrobeItem[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+  const { data: saveRows, error } = await supabase
+    .from("saved_wardrobe_items")
+    .select("item_id, created_at")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false });
+  if (error || !saveRows || saveRows.length === 0) return [];
+  const itemIds = saveRows.map((r: any) => r.item_id);
+  const { data, error: itemsErr } = await supabase
+    .from("wardrobe_items")
+    .select("*")
+    .in("id", itemIds);
+  if (itemsErr) throw itemsErr;
+  const items = (data ?? []) as WardrobeItem[];
+  const orderMap = new Map(saveRows.map((r: any, i: number) => [r.item_id, i]));
+  return items.sort((a, b) => (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0));
+}
+
+export async function getWardrobeItemSaveStatus(itemId: string): Promise<boolean> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return false;
+  const { data } = await supabase
+    .from("saved_wardrobe_items")
+    .select("id")
+    .eq("item_id", itemId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  return !!data;
 }
 
 export async function getPostLikers(postId: string): Promise<Profile[]> {
@@ -971,6 +1171,96 @@ export async function getItemPosts(itemId: string): Promise<Post[]> {
   if (error) throw error;
   const posts = (data ?? []).map((row: any) => row.post).filter(Boolean) as Post[];
   return posts.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+export async function getNotifications(): Promise<AppNotification[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+  const { data: rows, error } = await supabase
+    .from('notifications')
+    .select('*')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+    .limit(60);
+  if (error || !rows || rows.length === 0) return rows as AppNotification[] ?? [];
+
+  const actorIds = [...new Set(rows.map((r: any) => r.actor_id).filter(Boolean))];
+  const { data: profiles } = actorIds.length
+    ? await supabase.from('profiles').select('id, username, display_name, avatar_url').in('id', actorIds)
+    : { data: [] };
+  const profileMap = Object.fromEntries((profiles ?? []).map((p: any) => [p.id, p]));
+
+  return rows.map((r: any) => ({ ...r, actor: r.actor_id ? profileMap[r.actor_id] : undefined }));
+}
+
+export async function getNotificationsBadgeCount(): Promise<{ followRequests: number; unread: number }> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { followRequests: 0, unread: 0 };
+  const [
+    { count: followRequests },
+    { count: unread },
+  ] = await Promise.all([
+    supabase.from('follow_requests').select('*', { count: 'exact', head: true }).eq('requested_id', user.id),
+    supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('is_read', false),
+  ]);
+  return { followRequests: followRequests ?? 0, unread: unread ?? 0 };
+}
+
+export async function markNotificationsRead(): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
+  await supabase.from('notifications').update({ is_read: true }).eq('user_id', user.id).eq('is_read', false);
+}
+
+// ─── Community Requests ───────────────────────────────────────────────────────
+
+export async function getCommunityJoinStatus(communityId: string): Promise<'member' | 'pending' | 'none'> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return 'none';
+  const [{ data: member }, { data: request }] = await Promise.all([
+    supabase.from('community_members').select('user_id').eq('community_id', communityId).eq('user_id', user.id).maybeSingle(),
+    supabase.from('community_requests').select('id').eq('community_id', communityId).eq('user_id', user.id).maybeSingle(),
+  ]);
+  if (member) return 'member';
+  if (request) return 'pending';
+  return 'none';
+}
+
+export async function sendCommunityRequest(communityId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('not logged in');
+  const { error } = await supabase.from('community_requests').insert({ community_id: communityId, user_id: user.id });
+  if (error) throw error;
+}
+
+export async function cancelCommunityRequest(communityId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('not logged in');
+  const { error } = await supabase.from('community_requests').delete().eq('community_id', communityId).eq('user_id', user.id);
+  if (error) throw error;
+}
+
+export async function getCommunityRequests(communityId: string): Promise<CommunityRequest[]> {
+  const { data: rows, error } = await supabase
+    .from('community_requests')
+    .select('id, community_id, user_id, created_at')
+    .eq('community_id', communityId)
+    .order('created_at', { ascending: false });
+  if (error || !rows || rows.length === 0) return [];
+  const userIds = rows.map((r: any) => r.user_id);
+  const { data: profiles } = await supabase.from('profiles').select('id, username, display_name, avatar_url').in('id', userIds);
+  const profileMap = Object.fromEntries((profiles ?? []).map((p: any) => [p.id, p]));
+  return rows.map((r: any) => ({ ...r, profile: profileMap[r.user_id] ?? { id: r.user_id, username: 'unknown', display_name: null, avatar_url: null } }));
+}
+
+export async function resolveCommunityRequest(communityId: string, userId: string, accept: boolean): Promise<void> {
+  if (accept) {
+    const { error } = await supabase.from('community_members').insert({ community_id: communityId, user_id: userId });
+    if (error) throw error;
+  }
+  await supabase.from('community_requests').delete().eq('community_id', communityId).eq('user_id', userId);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
