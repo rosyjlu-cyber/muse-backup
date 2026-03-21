@@ -313,6 +313,10 @@ export default function AddScreen() {
         }
       }
       const savedPost = await upsertPost(date, photoUri, caption, tags, isPrivate);
+      // Always link manually-selected items first (safe even if scan fails)
+      if (selectedItems.length > 0) {
+        await Promise.all(selectedItems.map(i => addPostWardrobeItem(savedPost.id, i.id))).catch(() => {});
+      }
       const autoScanVal = await AsyncStorage.getItem(AUTO_SCAN_KEY);
       const autoScanOn = autoScanVal === null || autoScanVal === 'true';
       if (autoScanOn) {
@@ -320,15 +324,7 @@ export default function AddScreen() {
           savedPost.id,
           savedPost.photo_url,
           selectedItems.map(i => ({ id: i.id, label: i.label, ai_description: i.ai_description })),
-        )
-          .then(scanned => {
-            scanned.filter(i => !i.generated_image_url).forEach(i => {
-              generateItemImage(i.id).catch(() => {});
-            });
-          })
-          .catch(() => {});
-      } else if (selectedItems.length > 0) {
-        Promise.all(selectedItems.map(i => addPostWardrobeItem(savedPost.id, i.id))).catch(() => {});
+        ).catch(() => {});
       }
       router.replace({ pathname: '/entry/[date]' as any, params: { date } });
     } catch (e: any) {

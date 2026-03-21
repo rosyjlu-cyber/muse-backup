@@ -163,6 +163,31 @@ export async function verifyPhoneOTP(phone: string, token: string) {
   return supabase.auth.verifyOtp({ phone, token, type: "sms" });
 }
 
+// Resolve pending referrals — called after onboarding completes
+export async function resolveReferrals(): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user?.phone) return;
+  // Mark matching referrals as accepted
+  const { data: matched } = await supabase
+    .from('referrals')
+    .update({ invited_user_id: user.id, status: 'accepted' })
+    .eq('invited_phone', user.phone)
+    .eq('status', 'pending')
+    .select('inviter_id');
+  if (!matched || matched.length === 0) return;
+  // Auto-follow: mutual follow between inviter and new user
+  for (const ref of matched) {
+    await supabase.from('follows').upsert(
+      { follower_id: ref.inviter_id, following_id: user.id },
+      { onConflict: 'follower_id,following_id' },
+    );
+    await supabase.from('follows').upsert(
+      { follower_id: user.id, following_id: ref.inviter_id },
+      { onConflict: 'follower_id,following_id' },
+    );
+  }
+}
+
 // Link a phone number to an existing email account
 export async function sendPhoneLinkOTP(phone: string) {
   return supabase.auth.updateUser({ phone });
@@ -544,11 +569,19 @@ async function checkStreakMilestone(userId: string): Promise<void> {
     (streak >= 2 && streak <= 10) ||
     (streak > 10 && streak <= 100 && streak % 5 === 0) ||
     (streak > 100 && streak % 10 === 0);
-  if (isMilestone) {
-    await supabase.from('notifications').insert({
-      user_id: userId, type: 'streak', data: { count: streak },
-    });
-  }
+  if (!isMilestone) return;
+  // Prevent duplicate: check if this exact streak milestone was already notified
+  const { data: existing } = await supabase
+    .from('notifications')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('type', 'streak')
+    .eq('data->>count', String(streak))
+    .limit(1);
+  if (existing && existing.length > 0) return;
+  await supabase.from('notifications').insert({
+    user_id: userId, type: 'streak', data: { count: streak },
+  });
 }
 
 export async function updatePostMeta(
@@ -566,6 +599,8 @@ export async function updatePostMeta(
 }
 
 export async function deletePost(postId: string): Promise<void> {
+  // Remove notifications tied to this post (likes, comments)
+  await supabase.from('notifications').delete().eq('post_id', postId);
   const { error } = await supabase.from("posts").delete().eq("id", postId);
   if (error) throw error;
 }

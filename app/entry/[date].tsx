@@ -408,9 +408,6 @@ export default function EntryScreen() {
             </Text>
           </TouchableOpacity>
         ) : null}
-        {isOwn && post.is_private && !editing && (
-          <Text style={styles.hiddenBadgeText}>hidden from feed</Text>
-        )}
       </View>
 
       <KeyboardAvoidingView
@@ -729,6 +726,25 @@ export default function EntryScreen() {
                 </>
               )}
             </View>
+          )}
+
+          {/* Hide from feed toggle */}
+          {isOwn && !editing && (
+            <TouchableOpacity
+              style={styles.hideToggleRow}
+              activeOpacity={0.7}
+              onPress={async () => {
+                const next = !post.is_private;
+                setPost({ ...post, is_private: next });
+                try { await updatePostMeta(post.id, { is_private: next }); }
+                catch { setPost({ ...post, is_private: !next }); }
+              }}
+            >
+              <View style={[styles.hideToggleTrack, post.is_private && styles.hideToggleTrackOn]}>
+                <View style={[styles.hideToggleThumb, post.is_private && styles.hideToggleThumbOn]} />
+              </View>
+              <Text style={styles.hideToggleLabel}>hide from feed</Text>
+            </TouchableOpacity>
           )}
 
           {/* Replace + delete row */}
@@ -1238,9 +1254,33 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
 
+  hideToggleRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, marginTop: 20,
+  },
+  hideToggleLabel: {
+    fontSize: Theme.font.sm, color: Theme.colors.secondary, fontWeight: '500',
+  },
+  hideToggleTrack: {
+    width: 44, height: 26, borderRadius: 13,
+    backgroundColor: '#ccc',
+    justifyContent: 'center', paddingHorizontal: 2,
+  },
+  hideToggleTrackOn: {
+    backgroundColor: Theme.colors.accent,
+  },
+  hideToggleThumb: {
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: '#fff',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2,
+    elevation: 2,
+  },
+  hideToggleThumbOn: {
+    alignSelf: 'flex-end' as const,
+  },
   replaceBtnRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 12, marginTop: 32, marginBottom: 40,
+    gap: 12, marginTop: 20, marginBottom: 40,
   },
   replaceBtn: {
     backgroundColor: 'rgba(0,0,0,0.1)',

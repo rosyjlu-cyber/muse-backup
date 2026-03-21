@@ -39,6 +39,7 @@ import {
   sendPhoneOTP, verifyPhoneOTP,
   checkUsernameAvailable, updateProfile, uploadAvatar,
   getAllCommunities, joinCommunity, createCommunity, deleteCommunity,
+  resolveReferrals,
   Community,
 } from '@/utils/api';
 import { useAuth } from '@/utils/auth';
@@ -201,6 +202,8 @@ export default function OnboardingScreen() {
       setSavingProfile(false);
     }
     await refreshProfile();
+    // Resolve any pending referrals (auto-follow inviters)
+    resolveReferrals().catch(() => {});
     await AsyncStorage.setItem('muse_onboarding_done', 'true');
     router.replace('/(tabs)' as any);
   };

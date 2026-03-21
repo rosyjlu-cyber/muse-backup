@@ -61,7 +61,7 @@ export function FeedFiltersBar({ filters, onChange, communities, availableTags, 
 
       {/* Explore pill */}
       <Pill
-        label="explore"
+        label="Explore all"
         active={!!filters.explore}
         onPress={() => set({ explore: filters.explore ? undefined : true, communityId: undefined })}
         variant="explore"

@@ -220,7 +220,6 @@ export default function JournalHome() {
   const photoH = Math.round(photoW * 4 / 3);
 
   // Carousel: cards same size as the photo, centered with side cards peeking
-  const screenW = Dimensions.get('window').width;
   const CARD_GAP = 33;
   const cardW = photoW;
   const cardH = photoH;
@@ -235,7 +234,9 @@ export default function JournalHome() {
   }
   baseCards.push({ key: 'main', type: 'main' });
   if (todayPost) {
-    todayItems.forEach(item => baseCards.push({ key: `item-${item.id}`, type: 'item', item }));
+    todayItems
+      .filter(item => item.generated_image_url)
+      .forEach(item => baseCards.push({ key: `item-${item.id}`, type: 'item', item }));
   }
   const cardCount = baseCards.length;
 
@@ -252,13 +253,11 @@ export default function JournalHome() {
   const mainWheelIndex = needsWheel ? cardCount + mainBaseIndex : mainBaseIndex;
   const initialScrollX = mainWheelIndex * snapInterval;
 
-  const carouselRef = useRef<any>(null);
   const touchCarouselRef = useRef<any>(null);
 
-  // Scroll both carousels to center card on mount/post change
+  // Scroll touch carousel to center card on mount/post change
   useEffect(() => {
     const t = setTimeout(() => {
-      carouselRef.current?.scrollTo({ x: initialScrollX, animated: false });
       touchCarouselRef.current?.scrollTo({ x: initialScrollX, animated: false });
       carouselScrollX.setValue(initialScrollX);
     }, 50);
@@ -266,11 +265,9 @@ export default function JournalHome() {
   }, [todayPost?.id, todayItems.length]);
   const isAdjusting = useRef(false);
 
-  // Sync visual carousel when touch overlay scrolls
-  const onTouchCarouselScroll = (e: any) => {
-    const x = e.nativeEvent.contentOffset.x;
-    carouselRef.current?.scrollTo({ x, animated: false });
-  };
+  // Visual row translateX — driven entirely on native thread via carouselScrollX
+  const paddingH = (SCREEN_WIDTH - cardW) / 2;
+  const visualTranslateX = Animated.multiply(carouselScrollX, -1);
 
   // When user scrolls past first or third copy, silently jump to middle copy
   const onCarouselScrollEnd = (e: any) => {
@@ -282,7 +279,6 @@ export default function JournalHome() {
       const targetPage = cardCount + (page % cardCount);
       const targetX = targetPage * snapInterval;
       touchCarouselRef.current?.scrollTo({ x: targetX, animated: false });
-      carouselRef.current?.scrollTo({ x: targetX, animated: false });
       carouselScrollX.setValue(targetX);
       setTimeout(() => { isAdjusting.current = false; }, 50);
     }
@@ -328,26 +324,15 @@ export default function JournalHome() {
           Touch overlay rendered after ScrollView handles swipes/taps. */}
       <View style={[styles.heroLayer, { height: spacerH }]} pointerEvents="none">
         <View style={{ height: headerH }} />
-        <View style={styles.carouselWrapper}>
-          <Animated.ScrollView
-            scrollEnabled={false}
-            ref={carouselRef}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            snapToInterval={snapInterval}
-            decelerationRate="fast"
-            contentOffset={{ x: initialScrollX, y: 0 }}
-            contentContainerStyle={{
-              paddingHorizontal: (screenW - cardW) / 2,
-              gap: CARD_GAP,
+        <View style={[styles.carouselWrapper, { overflow: 'hidden' }]}>
+          <Animated.View
+            style={{
+              flexDirection: 'row',
               alignItems: 'center',
+              gap: CARD_GAP,
+              paddingHorizontal: paddingH,
+              transform: [{ translateX: visualTranslateX }],
             }}
-            onScroll={Animated.event(
-              [{ nativeEvent: { contentOffset: { x: carouselScrollX } } }],
-              { useNativeDriver: true },
-            )}
-            onMomentumScrollEnd={onCarouselScrollEnd}
-            scrollEventThrottle={16}
           >
             {wheelCards.map(card => {
               const animStyle = (todayPost || card.type !== 'main') ? getCardAnimStyle(card.idx) : undefined;
@@ -439,7 +424,7 @@ export default function JournalHome() {
                 </Animated.View>
               );
             })}
-          </Animated.ScrollView>
+          </Animated.View>
         </View>
       </View>
 
@@ -542,18 +527,19 @@ export default function JournalHome() {
           <Animated.ScrollView
             ref={touchCarouselRef}
             horizontal
+            scrollEnabled={cardCount > 1}
             showsHorizontalScrollIndicator={false}
             snapToInterval={snapInterval}
             decelerationRate="fast"
             contentOffset={{ x: initialScrollX, y: 0 }}
             contentContainerStyle={{
-              paddingHorizontal: (screenW - cardW) / 2,
+              paddingHorizontal: (SCREEN_WIDTH - cardW) / 2,
               gap: CARD_GAP,
               alignItems: 'center',
             }}
             onScroll={Animated.event(
               [{ nativeEvent: { contentOffset: { x: carouselScrollX } } }],
-              { useNativeDriver: true, listener: onTouchCarouselScroll },
+              { useNativeDriver: true },
             )}
             onMomentumScrollEnd={onCarouselScrollEnd}
             scrollEventThrottle={16}

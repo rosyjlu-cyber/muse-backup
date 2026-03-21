@@ -23,9 +23,9 @@ import { useAuth } from '@/utils/auth';
 import { formatShortDate } from '@/utils/dates';
 
 const SCREEN_WIDTH = Math.min(Dimensions.get('window').width, 390);
-const CARD_W = SCREEN_WIDTH - 32;
+const CARD_W = SCREEN_WIDTH;
 const CARD_H = Math.round(CARD_W * (4 / 3));
-const CARD_R = 18;
+const CARD_R = 0;
 
 interface PostCardProps {
   post: Post;
@@ -517,18 +517,9 @@ export function PostCard({ post, onPress, onLike, onSave, onComment, onAuthorPre
 const styles = StyleSheet.create({
   card: {
     width: CARD_W,
-    alignSelf: 'center',
-    marginBottom: 20,
+    marginBottom: 4,
     backgroundColor: '#FFFFFF',
-    borderRadius: CARD_R,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.10)',
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07,
-    shadowRadius: 8,
-    elevation: 2,
   },
 
   authorRow: {

@@ -6,7 +6,11 @@
       "Bash(ls -la /c/Users/rosyj/Desktop/Muse/muse-outfit-journal/app/\\\\\\(tabs\\\\\\)/)",
       "Bash(npx expo:*)",
       "Bash(git stash:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(xargs grep:*)",
+      "WebSearch",
+      "Bash(npx supabase:*)",
+      "Bash(npx -y esbuild supabase/functions/analyze-outfit/index.ts --bundle --format=esm --platform=neutral --outfile=/dev/null)"
     ]
   }
 }

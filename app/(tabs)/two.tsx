@@ -4,13 +4,13 @@ import {
   View,
   Text,
   TextInput,
-  FlatList,
   ScrollView,
   StyleSheet,
   StatusBar,
   RefreshControl,
   ActivityIndicator,
   TouchableOpacity,
+  Animated,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -37,6 +37,31 @@ export default function FeedScreen() {
   const [searching, setSearching] = useState(false);
   const [showAllPeople, setShowAllPeople] = useState(false);
   const searchTimeout = useRef<ReturnType<typeof setTimeout>>();
+
+  const scrollY = useRef(new Animated.Value(0)).current;
+  // Wordmark collapses first, then search + filters follow
+  const COLLAPSE_1 = 40; // wordmark fully hidden
+  const COLLAPSE_2 = 100; // search + filters fully hidden
+  const headerOpacity = scrollY.interpolate({
+    inputRange: [0, COLLAPSE_1],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+  const headerHeight = scrollY.interpolate({
+    inputRange: [0, COLLAPSE_1],
+    outputRange: [52, 0],
+    extrapolate: 'clamp',
+  });
+  const searchOpacity = scrollY.interpolate({
+    inputRange: [COLLAPSE_1, COLLAPSE_2],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+  const searchMaxHeight = scrollY.interpolate({
+    inputRange: [COLLAPSE_1, COLLAPSE_2],
+    outputRange: [120, 0],
+    extrapolate: 'clamp',
+  });
 
   const handleSearchChange = (text: string) => {
     setSearchQuery(text);
@@ -147,11 +172,11 @@ export default function FeedScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <StatusBar barStyle="light-content" backgroundColor={Theme.colors.background} />
 
-      {/* Header */}
-      <View style={styles.header}>
+      {/* Header — collapses on scroll */}
+      <Animated.View style={[styles.header, { height: headerHeight, opacity: headerOpacity, overflow: 'hidden' }]}>
         <Text style={styles.wordmark}>muse</Text>
         <TouchableOpacity
           onPress={() => router.push('/communities' as any)}
@@ -162,35 +187,37 @@ export default function FeedScreen() {
             <Text style={styles.communityBtnText}>join a community</Text>
           </View>
         </TouchableOpacity>
-      </View>
+      </Animated.View>
 
-      {/* Search */}
-      <View style={styles.searchRow}>
-        <Feather name="search" size={15} color={Theme.colors.secondary} />
-        <TextInput
-          style={styles.searchInput}
-          value={searchQuery}
-          onChangeText={handleSearchChange}
-          placeholder="search outfits, tags, people..."
-          placeholderTextColor={Theme.colors.disabled}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => { setSearchQuery(''); setSearchPeople([]); setSearchPostResults([]); }} hitSlop={8}>
-            <Feather name="x" size={15} color={Theme.colors.secondary} />
-          </TouchableOpacity>
-        )}
-      </View>
+      {/* Search + Filters — collapse on scroll */}
+      <Animated.View style={{ maxHeight: searchMaxHeight, opacity: searchOpacity, overflow: 'hidden' }}>
+        <View style={styles.searchRow}>
+          <Feather name="search" size={15} color={Theme.colors.secondary} />
+          <TextInput
+            style={styles.searchInput}
+            value={searchQuery}
+            onChangeText={handleSearchChange}
+            placeholder="search outfits, tags, people..."
+            placeholderTextColor={Theme.colors.disabled}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => { setSearchQuery(''); setSearchPeople([]); setSearchPostResults([]); }} hitSlop={8}>
+              <Feather name="x" size={15} color={Theme.colors.secondary} />
+            </TouchableOpacity>
+          )}
+        </View>
 
-      {/* Filters — always visible; when searching, shown inside results */}
-      {!searchQuery.trim() && <FeedFiltersBar
-        filters={filters}
-        onChange={setFilters}
-        communities={communities}
-        availableTags={[]}
-        onCommunityLongPress={(id) => router.push({ pathname: '/community/[id]' as any, params: { id } })}
-      />}
+        {/* Filters — always visible; when searching, shown inside results */}
+        {!searchQuery.trim() && <FeedFiltersBar
+          filters={filters}
+          onChange={setFilters}
+          communities={communities}
+          availableTags={[]}
+          onCommunityLongPress={(id) => router.push({ pathname: '/community/[id]' as any, params: { id } })}
+        />}
+      </Animated.View>
 
       {searchQuery.trim() ? (
         /* Search results inline */
@@ -272,10 +299,15 @@ export default function FeedScreen() {
         </ScrollView>
       ) : (
         /* Feed */
-        <FlatList
+        <Animated.FlatList
           data={posts}
           keyExtractor={item => item.id}
-          renderItem={({ item }) => (
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+            { useNativeDriver: false },
+          )}
+          scrollEventThrottle={16}
+          renderItem={({ item }: { item: Post }) => (
             <PostCard
               post={item}
               onPress={() => handlePostPress(item)}
