@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
+import { Image } from 'expo-image';
 import {
-  View, Text, Image, TextInput, TouchableOpacity,
+  View, Text, TextInput, TouchableOpacity,
   StyleSheet, ScrollView, Alert, Platform,
   ActivityIndicator, Linking, Dimensions,
   KeyboardAvoidingView, StatusBar, Modal, FlatList,
@@ -296,7 +297,7 @@ export default function WardrobeItemScreen() {
           {/* Photos row: thumbnails + "+" */}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photosRow} style={styles.photosScroll}>
             {allImages.map(img => (
-              <Image key={img.id} source={{ uri: img.url }} style={styles.photoThumb} resizeMode="cover" />
+              <Image key={img.id} source={{ uri: img.url }} style={styles.photoThumb} resizeMode="cover" cachePolicy="disk" />
             ))}
             {isOwn && (
               <TouchableOpacity
@@ -504,7 +505,7 @@ export default function WardrobeItemScreen() {
                     onPress={() => router.push({ pathname: '/entry/[date]' as any, params: { date: post.date, ...(isOwn ? {} : { userId: item.user_id }) } })}
                     activeOpacity={0.82}
                   >
-                    <Image source={{ uri: post.photo_url }} style={styles.wornInImg} resizeMode="cover" />
+                    <Image source={{ uri: post.photo_url }} style={styles.wornInImg} resizeMode="cover" cachePolicy="disk" />
                   </TouchableOpacity>
                 ))}
                 {wornInEdit && (
@@ -524,7 +525,7 @@ export default function WardrobeItemScreen() {
           {isOwn && (
             <>
               <TouchableOpacity onPress={handleOpenMerge} activeOpacity={0.75} style={styles.mergeActionBtnWrap}>
-                <LinearGradient colors={['#F9C74F', '#F77FAD']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.mergeActionBtn}>
+                <LinearGradient colors={['#fdf5b9', '#f0c8e8', '#e9b3ee']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.mergeActionBtn}>
                   <Text style={styles.mergeActionText}>merge with another item</Text>
                 </LinearGradient>
               </TouchableOpacity>
@@ -568,7 +569,7 @@ export default function WardrobeItemScreen() {
                 activeOpacity={0.8}
                 disabled={addingPostLink}
               >
-                <Image source={{ uri: post.photo_url }} style={styles.postPickerImg} resizeMode="cover" />
+                <Image source={{ uri: post.photo_url }} style={styles.postPickerImg} resizeMode="cover" cachePolicy="disk" />
               </TouchableOpacity>
             )}
             ListEmptyComponent={
@@ -618,7 +619,7 @@ export default function WardrobeItemScreen() {
                     activeOpacity={0.8}
                   >
                     {imgUrl ? (
-                      <Image source={{ uri: imgUrl }} style={styles.mergeCellImage} resizeMode="contain" />
+                      <Image source={{ uri: imgUrl }} style={styles.mergeCellImage} resizeMode="contain" cachePolicy="disk" />
                     ) : (
                       <View style={[styles.mergeCellImage, styles.mergePlaceholder]}>
                         <Text style={{ fontSize: 28 }}>{catEmoji(mi.category)}</Text>
@@ -655,7 +656,7 @@ export default function WardrobeItemScreen() {
                       activeOpacity={0.85}
                     >
                       {imgUrl ? (
-                        <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" />
+                        <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" cachePolicy="disk" />
                       ) : (
                         <View style={[styles.mergeCompareImg, styles.mergePlaceholder]}>
                           <Text style={{ fontSize: 36 }}>{catEmoji(wi.category)}</Text>
@@ -832,7 +833,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24, paddingVertical: 11,
     borderRadius: 100,
   },
-  mergeActionText: { fontSize: Theme.font.sm, fontWeight: '700', color: '#7C3060' },
+  mergeActionText: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.primary },
   removeBtn: { alignSelf: 'center', marginTop: 16, marginBottom: 8, paddingVertical: 8, paddingHorizontal: 16 },
 
   // Merge modal
@@ -893,5 +894,5 @@ const styles = StyleSheet.create({
   mergeConfirmBtn: {
     borderRadius: Theme.radius.md, paddingVertical: 16, alignItems: 'center',
   },
-  mergeConfirmBtnText: { fontSize: Theme.font.base, fontWeight: '700', color: '#7C3060' },
+  mergeConfirmBtnText: { fontSize: Theme.font.base, fontWeight: '700', color: Theme.colors.primary },
 });

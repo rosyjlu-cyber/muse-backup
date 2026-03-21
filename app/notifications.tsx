@@ -1,11 +1,11 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
+import { Image } from 'expo-image';
 import {
   View,
   Text,
-  Image,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
+  FlatList,
   ActivityIndicator,
   StatusBar,
 } from 'react-native';
@@ -42,21 +42,37 @@ export default function NotificationsScreen() {
   const [requests, setRequests] = useState<FollowRequest[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [resolving, setResolving] = useState<Set<string>>(new Set());
+  const hasLoaded = useRef(false);
+  const nextCursor = useRef<string | undefined>();
 
   useFocusEffect(
     useCallback(() => {
-      setLoading(true);
+      if (hasLoaded.current) return;
+      hasLoaded.current = true;
       Promise.all([getPendingFollowRequests(), getNotifications()])
-        .then(([reqs, notifs]) => {
+        .then(([reqs, result]) => {
           setRequests(reqs);
-          setNotifications(notifs);
+          setNotifications(result.notifications);
+          nextCursor.current = result.nextCursor;
           markNotificationsRead().catch(() => {});
         })
         .catch(console.error)
         .finally(() => setLoading(false));
     }, [])
   );
+
+  const loadMore = async () => {
+    if (loadingMore || !nextCursor.current) return;
+    setLoadingMore(true);
+    try {
+      const result = await getNotifications(nextCursor.current);
+      setNotifications(prev => [...prev, ...result.notifications]);
+      nextCursor.current = result.nextCursor;
+    } catch {}
+    finally { setLoadingMore(false); }
+  };
 
   const handleResolve = async (req: FollowRequest, accept: boolean) => {
     setResolving(prev => new Set([...prev, req.requester_id]));
@@ -89,11 +105,17 @@ export default function NotificationsScreen() {
       case 'new_follower': return `${name} started following you`;
       case 'follow_accepted': return `you're now following ${name}`;
       case 'streak': return `${n.data?.count}-day streak!`;
+      case 'community_invite': return `${name} added you to a community`;
+      case 'community_accepted': return `your request to join was accepted`;
     }
   };
 
   const handleNotifPress = (n: AppNotification) => {
     if (n.type === 'streak') return;
+    if ((n.type === 'community_invite' || n.type === 'community_accepted') && n.data?.community_id) {
+      router.push({ pathname: '/community/[id]' as any, params: { id: n.data.community_id } });
+      return;
+    }
     if ((n.type === 'like' || n.type === 'comment') && n.post_id) {
       // Navigate to entry — we need the date; it's on the post but we only have post_id.
       // For now navigate to the actor's profile as a fallback if no date
@@ -128,11 +150,15 @@ export default function NotificationsScreen() {
           <Text style={styles.emptyText}>nothing yet</Text>
         </View>
       ) : (
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.list}>
-
-          {/* ── Follow requests ── */}
-          {requests.length > 0 && (
-            <>
+        <FlatList
+          data={notifications}
+          keyExtractor={n => n.id}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.list}
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.3}
+          ListHeaderComponent={requests.length > 0 ? (
+            <View>
               <Text style={styles.sectionLabel}>follow requests</Text>
               {requests.map(req => {
                 const p = req.profile;
@@ -145,7 +171,7 @@ export default function NotificationsScreen() {
                       activeOpacity={0.8}
                     >
                       {p.avatar_url ? (
-                        <Image source={{ uri: p.avatar_url }} style={styles.avatar} />
+                        <Image source={{ uri: p.avatar_url }} style={styles.avatar} cachePolicy="disk" />
                       ) : (
                         <View style={styles.avatarPlaceholder}>
                           <Text style={styles.avatarInitial}>{(displayName)[0].toUpperCase()}</Text>
@@ -182,52 +208,50 @@ export default function NotificationsScreen() {
                   </View>
                 );
               })}
-            </>
-          )}
-
-          {/* ── Activity ── */}
-          {notifications.length > 0 && (
-            <>
-              <Text style={styles.sectionLabel}>activity</Text>
-              {notifications.map(n => {
-                const isStreak = n.type === 'streak';
-                const actor = n.actor;
-                return (
-                  <TouchableOpacity
-                    key={n.id}
-                    style={[styles.row, !n.is_read && styles.rowUnread]}
-                    onPress={() => handleNotifPress(n)}
-                    activeOpacity={0.8}
-                  >
-                    {isStreak ? (
-                      <View style={styles.streakIcon}>
-                        <Text style={styles.streakEmoji}>🔥</Text>
-                      </View>
-                    ) : actor?.avatar_url ? (
-                      <TouchableOpacity onPress={() => router.push({ pathname: '/profile/[userId]' as any, params: { userId: actor.id } })} activeOpacity={0.8}>
-                        <Image source={{ uri: actor.avatar_url }} style={styles.avatar} />
-                      </TouchableOpacity>
-                    ) : (
-                      <TouchableOpacity onPress={() => actor && router.push({ pathname: '/profile/[userId]' as any, params: { userId: actor.id } })} activeOpacity={0.8}>
-                        <View style={styles.avatarPlaceholder}>
-                          <Text style={styles.avatarInitial}>
-                            {actor ? (actor.display_name ?? actor.username)[0].toUpperCase() : '?'}
-                          </Text>
-                        </View>
-                      </TouchableOpacity>
-                    )}
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.notifText}>{notifText(n)}</Text>
-                    </View>
-                    <Text style={styles.timeText}>{timeAgo(n.created_at)}</Text>
+              {notifications.length > 0 && <Text style={styles.sectionLabel}>activity</Text>}
+            </View>
+          ) : notifications.length > 0 ? (
+            <Text style={styles.sectionLabel}>activity</Text>
+          ) : null}
+          renderItem={({ item: n }) => {
+            const isStreak = n.type === 'streak';
+            const actor = n.actor;
+            return (
+              <TouchableOpacity
+                style={[styles.row, !n.is_read && styles.rowUnread]}
+                onPress={() => handleNotifPress(n)}
+                activeOpacity={0.8}
+              >
+                {isStreak ? (
+                  <View style={styles.streakIcon}>
+                    <Text style={styles.streakEmoji}>🔥</Text>
+                  </View>
+                ) : actor?.avatar_url ? (
+                  <TouchableOpacity onPress={() => router.push({ pathname: '/profile/[userId]' as any, params: { userId: actor.id } })} activeOpacity={0.8}>
+                    <Image source={{ uri: actor.avatar_url }} style={styles.avatar} cachePolicy="disk" />
                   </TouchableOpacity>
-                );
-              })}
-            </>
-          )}
-
-          <View style={{ height: 32 }} />
-        </ScrollView>
+                ) : (
+                  <TouchableOpacity onPress={() => actor && router.push({ pathname: '/profile/[userId]' as any, params: { userId: actor.id } })} activeOpacity={0.8}>
+                    <View style={styles.avatarPlaceholder}>
+                      <Text style={styles.avatarInitial}>
+                        {actor ? (actor.display_name ?? actor.username)[0].toUpperCase() : '?'}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.notifText}>{notifText(n)}</Text>
+                </View>
+                <Text style={styles.timeText}>{timeAgo(n.created_at)}</Text>
+              </TouchableOpacity>
+            );
+          }}
+          ListFooterComponent={loadingMore ? (
+            <View style={{ paddingVertical: 20 }}>
+              <ActivityIndicator color={Theme.colors.brandWarm} />
+            </View>
+          ) : <View style={{ height: 32 }} />}
+        />
       )}
     </SafeAreaView>
   );

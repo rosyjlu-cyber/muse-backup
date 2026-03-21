@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx supabase functions deploy analyze-outfit --project-ref msoyfpmqknubagpvkpxz --no-verify-jwt)"
+      "Bash(npx supabase functions deploy analyze-outfit --project-ref msoyfpmqknubagpvkpxz --no-verify-jwt)",
+      "Bash(file assets/images/*.png)",
+      "Bash(ls -la /c/Users/rosyj/Desktop/Muse/muse-outfit-journal/app/\\\\\\(tabs\\\\\\)/)",
+      "Bash(npx expo:*)",
+      "Bash(git stash:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

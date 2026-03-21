@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
+import { Image } from 'expo-image';
 import {
   View,
   Text,
-  Image,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -106,7 +106,8 @@ export function PostCard({ post, onPress, onLike, onSave, onComment, onAuthorPre
   };
 
   const handleShare = () => {
-    Share.share({ message: `Check out this outfit on muse! 🧥` }).catch(() => {});
+    const url = `https://bemymuse.app/outfit/${post.id}`;
+    Share.share({ message: `check out this outfit on muse 🧥 ${url}`, url }).catch(() => {});
   };
 
   const handleCommentLike = (commentId: string) => {
@@ -196,6 +197,7 @@ export function PostCard({ post, onPress, onLike, onSave, onComment, onAuthorPre
         {c.profile?.avatar_url ? (
           <Image
             source={{ uri: c.profile.avatar_url }}
+              cachePolicy="disk"
             style={isReply ? styles.replyAvatar : styles.commentAvatar}
           />
         ) : (
@@ -256,7 +258,7 @@ export function PostCard({ post, onPress, onLike, onSave, onComment, onAuthorPre
         disabled={!onAuthorPress}
       >
         {post.profile?.avatar_url ? (
-          <Image source={{ uri: post.profile.avatar_url }} style={styles.avatar} />
+          <Image source={{ uri: post.profile.avatar_url }} style={styles.avatar} cachePolicy="disk" />
         ) : (
           <View style={styles.avatarPlaceholder}>
             <Text style={styles.avatarLetter}>{avatarLetter}</Text>
@@ -268,7 +270,16 @@ export function PostCard({ post, onPress, onLike, onSave, onComment, onAuthorPre
 
       {/* Photo */}
       <TouchableOpacity onPress={onPress} activeOpacity={0.95}>
-        <Image source={{ uri: post.photo_url }} style={styles.photo} resizeMode="cover" />
+        <Image
+          source={{ uri: post.photo_url }}
+            cachePolicy="disk"
+          style={styles.photo}
+          contentFit="cover"
+          cachePolicy="disk"
+          recyclingKey={post.id}
+          transition={200}
+          placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }}
+        />
       </TouchableOpacity>
 
       {/* Caption */}
@@ -480,7 +491,7 @@ export function PostCard({ post, onPress, onLike, onSave, onComment, onAuthorPre
                     activeOpacity={0.7}
                   >
                     {p.avatar_url ? (
-                      <Image source={{ uri: p.avatar_url }} style={styles.likerAvatar} />
+                      <Image source={{ uri: p.avatar_url }} style={styles.likerAvatar} cachePolicy="disk" />
                     ) : (
                       <View style={styles.likerAvatarPlaceholder}>
                         <Text style={styles.likerAvatarInitial}>

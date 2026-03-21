@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Image } from 'expo-image';
 import {
   View,
   Text,
-  Image,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Switch,
+  KeyboardAvoidingView,
+  Animated,
+  Modal,
   TextInput,
   Alert,
   Linking,
@@ -30,11 +32,39 @@ import {
   uploadAvatar,
   signOut,
   deleteAccount,
+  getFollowers,
+  getFollowing,
   Community,
   Post,
   Profile,
 } from '@/utils/api';
 import { useAuth } from '@/utils/auth';
+import { supabase } from '@/utils/supabase';
+
+function GradientToggle({ value, onValueChange }: { value: boolean; onValueChange: (v: boolean) => void }) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.8}
+      onPress={() => onValueChange(!value)}
+      style={{ width: 51, height: 31, borderRadius: 16, justifyContent: 'center', padding: 2 }}
+    >
+      {value ? (
+        <LinearGradient
+          colors={['#F9C74F', '#F77FAD']}
+          start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 16 }}
+        />
+      ) : (
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 16, backgroundColor: Theme.colors.surface }} />
+      )}
+      <View style={{
+        width: 27, height: 27, borderRadius: 14, backgroundColor: '#fff',
+        alignSelf: value ? 'flex-end' : 'flex-start',
+        shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 2, shadowOffset: { width: 0, height: 1 }, elevation: 2,
+      }} />
+    </TouchableOpacity>
+  );
+}
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -56,6 +86,51 @@ export default function ProfileScreen() {
   const [notifReminder, setNotifReminder] = useState(false);
   const [notifSocial, setNotifSocial] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackSent, setFeedbackSent] = useState(false);
+  const [sendingFeedback, setSendingFeedback] = useState(false);
+
+  // Popup modals
+  const [popupType, setPopupType] = useState<'followers' | 'following' | 'communities' | null>(null);
+  const [popupProfiles, setPopupProfiles] = useState<Profile[]>([]);
+  const [popupLoading, setPopupLoading] = useState(false);
+
+  const openPopup = async (type: 'followers' | 'following' | 'communities') => {
+    setPopupType(type);
+    setPopupLoading(true);
+    try {
+      if (type === 'followers') {
+        setPopupProfiles(await getFollowers(profile!.id));
+      } else if (type === 'following') {
+        setPopupProfiles(await getFollowing(profile!.id));
+      }
+    } catch {}
+    finally { setPopupLoading(false); }
+  };
+
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const SCROLL_THRESHOLD = 60;
+  const titleFontSize = scrollY.interpolate({
+    inputRange: [0, SCROLL_THRESHOLD],
+    outputRange: [28, 20],
+    extrapolate: 'clamp',
+  });
+  const usernameFontSize = scrollY.interpolate({
+    inputRange: [0, SCROLL_THRESHOLD],
+    outputRange: [14, 10],
+    extrapolate: 'clamp',
+  });
+  const headerCenterMarginTop = scrollY.interpolate({
+    inputRange: [0, SCROLL_THRESHOLD],
+    outputRange: [28, 0],
+    extrapolate: 'clamp',
+  });
+  const headerPaddingBottom = scrollY.interpolate({
+    inputRange: [0, SCROLL_THRESHOLD],
+    outputRange: [10, 4],
+    extrapolate: 'clamp',
+  });
 
   useEffect(() => {
     AsyncStorage.multiGet(['notif_reminder', 'notif_social']).then(([reminder, social]) => {
@@ -101,7 +176,7 @@ export default function ProfileScreen() {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') return;
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.8,
       allowsEditing: true,
       aspect: [1, 1],
@@ -110,10 +185,10 @@ export default function ProfileScreen() {
     try {
       const url = await uploadAvatar(profile.id, result.assets[0].uri);
       const updated = await updateProfile(profile.id, { avatar_url: url });
-      setProfile(updated);
+      setProfile({ ...updated, avatar_url: url });
       refreshProfile();
     } catch (e: any) {
-      Alert.alert('error', e?.message ?? 'could not upload photo');
+      Alert.alert('oops', e?.message ?? 'could not upload photo');
     }
   };
 
@@ -217,26 +292,85 @@ export default function ProfileScreen() {
     );
   };
 
+  const handleSendFeedback = async () => {
+    if (!feedbackText.trim() || sendingFeedback) return;
+    setSendingFeedback(true);
+    try {
+      await supabase.from('feedback').insert({
+        user_id: profile.id,
+        content: feedbackText.trim(),
+      });
+      setFeedbackText('');
+      setFeedbackSent(true);
+    } catch { /* silent */ }
+    finally { setSendingFeedback(false); }
+  };
+
   const displayName = profile.display_name ?? profile.username;
   const initials = displayName[0].toUpperCase();
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
-          <Text style={styles.backText}>‹ back</Text>
+      <Animated.View style={[styles.header, { paddingBottom: headerPaddingBottom }]}>
+        <Animated.View style={[styles.headerCenter, { marginTop: headerCenterMarginTop }]}>
+          {editingProfile ? (
+            <TextInput
+              style={styles.headerTitleInput}
+              value={draftName}
+              onChangeText={setDraftName}
+              autoFocus
+              returnKeyType="done"
+              placeholderTextColor={Theme.colors.disabled}
+              textAlign="center"
+            />
+          ) : (
+            <Animated.Text style={[styles.headerTitle, { fontSize: titleFontSize }]}>{displayName}</Animated.Text>
+          )}
+          {editingProfile ? (
+            <View style={styles.headerUsernameRow}>
+              <Text style={styles.headerUsernameAt}>@</Text>
+              <TextInput
+                style={styles.headerUsernameInput}
+                value={draftUsername}
+                onChangeText={setDraftUsername}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="done"
+                placeholderTextColor={Theme.colors.disabled}
+              />
+            </View>
+          ) : (
+            <Animated.Text style={[styles.headerUsername, { fontSize: usernameFontSize }]}>@{profile.username}</Animated.Text>
+          )}
+        </Animated.View>
+        <TouchableOpacity onPress={editingProfile ? () => setEditingProfile(false) : () => router.back()} hitSlop={12} style={styles.headerLeft}>
+          <Text style={styles.backText}>{editingProfile ? 'cancel' : '‹ back'}</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>profile</Text>
-        <TouchableOpacity onPress={handleSignOut} hitSlop={12}>
-          <Text style={styles.signOutText}>sign out</Text>
-        </TouchableOpacity>
-      </View>
+        {editingProfile && (
+          <TouchableOpacity onPress={saveProfile} disabled={savingProfile} hitSlop={12} style={styles.headerRight}>
+            {savingProfile
+              ? <ActivityIndicator size="small" color={Theme.colors.accent} />
+              : <Text style={styles.headerSaveText}>save</Text>
+            }
+          </TouchableOpacity>
+        )}
+      </Animated.View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+      <Animated.ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        scrollEventThrottle={16}
+      >
         {/* Avatar */}
         <TouchableOpacity style={styles.avatarArea} onPress={handleAvatarPress} activeOpacity={0.8}>
           {profile.avatar_url ? (
-            <Image source={{ uri: profile.avatar_url }} style={styles.avatar} />
+            <Image source={{ uri: profile.avatar_url }} style={styles.avatar} cachePolicy="disk" />
           ) : (
             <View style={styles.avatarPlaceholder}>
               <Text style={styles.avatarInitials}>{initials}</Text>
@@ -247,65 +381,30 @@ export default function ProfileScreen() {
           </View>
         </TouchableOpacity>
 
-        {/* Name / username / bio — unified edit */}
+        {/* Bio */}
         {editingProfile ? (
-          <View style={styles.nameBlock}>
-            <View style={styles.nameBlockSpacer} />
-            <View style={{ flex: 1, alignItems: 'center', gap: 8 }}>
-              <TextInput
-                style={styles.nameInput}
-                value={draftName}
-                onChangeText={setDraftName}
-                autoFocus
-                returnKeyType="next"
-                placeholderTextColor={Theme.colors.disabled}
-              />
-              <View style={styles.nameEditRow}>
-                <Text style={styles.usernameAt}>@</Text>
-                <TextInput
-                  style={styles.usernameInput}
-                  value={draftUsername}
-                  onChangeText={setDraftUsername}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  returnKeyType="next"
-                  placeholderTextColor={Theme.colors.disabled}
-                />
-              </View>
-              <TextInput
-                style={styles.bioInputEdit}
-                value={draftBio}
-                onChangeText={setDraftBio}
-                multiline
-                maxLength={150}
-                placeholder="describe your vibe..."
-                placeholderTextColor={Theme.colors.disabled}
-                textAlignVertical="top"
-              />
-              <Text style={[styles.bioCharCount, { alignSelf: 'flex-end' }]}>{draftBio.length}/150</Text>
-            </View>
-            <TouchableOpacity onPress={saveProfile} disabled={savingProfile} hitSlop={10} style={styles.nameEditIcon}>
-              {savingProfile
-                ? <ActivityIndicator size="small" color={Theme.colors.secondary} />
-                : <Feather name="check" size={16} color={Theme.colors.secondary} />
-              }
-            </TouchableOpacity>
+          <View style={styles.bioEditWrap}>
+            <TextInput
+              style={styles.bioInputEdit}
+              value={draftBio}
+              onChangeText={setDraftBio}
+              multiline
+              maxLength={150}
+              placeholder="describe your vibe..."
+              placeholderTextColor={Theme.colors.disabled}
+              textAlignVertical="top"
+            />
+            <Text style={styles.bioCharCount}>{draftBio.length}/150</Text>
           </View>
         ) : (
-          <View style={styles.nameBlock}>
-            <View style={styles.nameBlockSpacer} />
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={styles.displayName}>{displayName}</Text>
-              <Text style={styles.username}>@{profile.username}</Text>
-              {profile.bio
-                ? <Text style={styles.bioText}>{profile.bio}</Text>
-                : <Text style={styles.bioPlaceholder}>+ add a bio</Text>
-              }
-            </View>
+          <View style={styles.bioRow}>
+            {profile.bio
+              ? <Text style={styles.bioText}>{profile.bio}</Text>
+              : <Text style={styles.bioPlaceholder}>+ add a bio</Text>
+            }
             <TouchableOpacity
               onPress={() => { setDraftName(displayName); setDraftUsername(profile.username); setDraftBio(profile.bio ?? ''); setEditingProfile(true); }}
               hitSlop={10}
-              style={styles.nameEditIcon}
             >
               <Feather name="edit-2" size={14} color={Theme.colors.secondary} />
             </TouchableOpacity>
@@ -319,22 +418,22 @@ export default function ProfileScreen() {
           style={styles.statsCard}
         >
           <View style={styles.statsGrid}>
-            <View style={styles.stat}>
+            <TouchableOpacity style={styles.stat} onPress={() => router.push('/' as any)} activeOpacity={0.7}>
               <Text style={styles.statNum}>{posts.length}</Text>
               <Text style={styles.statLabel}>outfits</Text>
-            </View>
-            <TouchableOpacity style={styles.stat} onPress={() => router.push('/communities' as any)} hitSlop={8}>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.stat} onPress={() => openPopup('communities')} activeOpacity={0.7}>
               <Text style={styles.statNum}>{communities.length}</Text>
               <Text style={styles.statLabel}>communities</Text>
             </TouchableOpacity>
-            <View style={styles.stat}>
+            <TouchableOpacity style={styles.stat} onPress={() => openPopup('followers')} activeOpacity={0.7}>
               <Text style={styles.statNum}>{profile.followers_count ?? 0}</Text>
               <Text style={styles.statLabel}>followers</Text>
-            </View>
-            <View style={styles.stat}>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.stat} onPress={() => openPopup('following')} activeOpacity={0.7}>
               <Text style={styles.statNum}>{profile.following_count ?? 0}</Text>
               <Text style={styles.statLabel}>following</Text>
-            </View>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.statsTagDivider} />
@@ -384,6 +483,46 @@ export default function ProfileScreen() {
           </ScrollView>
         </LinearGradient>
 
+        {/* Feedback card */}
+        <LinearGradient
+          colors={['#CCE0EE', '#A6C2D7', '#82A9BF']}
+          start={{ x: 0.2, y: 0 }} end={{ x: 0.8, y: 1 }}
+          style={styles.feedbackCard}
+        >
+          {feedbackSent ? (
+            <View style={{ alignItems: 'center', paddingVertical: 12 }}>
+              <Text style={styles.feedbackTitle}>thank you 💛</Text>
+              <Text style={styles.feedbackSub}>Your input means the world to us.</Text>
+            </View>
+          ) : (
+            <>
+              <Text style={styles.feedbackTitle}>we're committed to building your dream fashion app.</Text>
+              <Text style={styles.feedbackSub}>Muse is still early and your feedback shapes what comes next. Tell us what you love, features you want us to add, or what's broken.</Text>
+              <TextInput
+                style={styles.feedbackInput}
+                value={feedbackText}
+                onChangeText={setFeedbackText}
+                placeholder="i wish muse could..."
+                placeholderTextColor={Theme.colors.disabled}
+                multiline
+                maxLength={500}
+                textAlignVertical="top"
+              />
+              <TouchableOpacity
+                style={[styles.feedbackBtn, !feedbackText.trim() && { opacity: 0.4 }]}
+                onPress={handleSendFeedback}
+                disabled={!feedbackText.trim() || sendingFeedback}
+                activeOpacity={0.8}
+              >
+                {sendingFeedback
+                  ? <ActivityIndicator size="small" color={Theme.colors.primary} />
+                  : <Text style={styles.feedbackBtnText}>send feedback ✨</Text>
+                }
+              </TouchableOpacity>
+            </>
+          )}
+        </LinearGradient>
+
         {/* Settings (collapsible) */}
         <TouchableOpacity style={styles.settingsHeader} onPress={() => setSettingsOpen(o => !o)} activeOpacity={0.7}>
           <Text style={styles.settingsHeaderText}>settings</Text>
@@ -402,12 +541,10 @@ export default function ProfileScreen() {
                       : 'only approved followers and community members can see your outfits.'}
                   </Text>
                 </View>
-                <Switch
+                <GradientToggle
                   value={profile.is_public}
                   onValueChange={handleTogglePublic}
-                  trackColor={{ false: Theme.colors.surface, true: Theme.colors.accent }}
-                  thumbColor={Theme.colors.primary}
-                />
+                  />
               </View>
               <View style={styles.rowDivider} />
               <View style={styles.row}>
@@ -415,7 +552,7 @@ export default function ProfileScreen() {
                   <Text style={styles.rowLabel}>share my closet</Text>
                   <Text style={styles.rowSub}>let followers browse your wardrobe</Text>
                 </View>
-                <Switch
+                <GradientToggle
                   value={profile.share_closet ?? true}
                   onValueChange={async (val) => {
                     try {
@@ -426,9 +563,7 @@ export default function ProfileScreen() {
                       Alert.alert('error', 'could not update closet setting');
                     }
                   }}
-                  trackColor={{ false: Theme.colors.surface, true: Theme.colors.accent }}
-                  thumbColor={Theme.colors.primary}
-                />
+                  />
               </View>
             </View>
 
@@ -438,12 +573,10 @@ export default function ProfileScreen() {
                   <Text style={styles.rowLabel}>daily reminder</Text>
                   <Text style={styles.rowSub}>nudge to log your outfit each day</Text>
                 </View>
-                <Switch
+                <GradientToggle
                   value={notifReminder}
                   onValueChange={toggleNotifReminder}
-                  trackColor={{ false: Theme.colors.surface, true: Theme.colors.accent }}
-                  thumbColor={Theme.colors.primary}
-                />
+                  />
               </View>
               <View style={styles.rowDivider} />
               <View style={styles.row}>
@@ -451,12 +584,10 @@ export default function ProfileScreen() {
                   <Text style={styles.rowLabel}>likes & comments</Text>
                   <Text style={styles.rowSub}>get notified when people interact with your looks</Text>
                 </View>
-                <Switch
+                <GradientToggle
                   value={notifSocial}
                   onValueChange={toggleNotifSocial}
-                  trackColor={{ false: Theme.colors.surface, true: Theme.colors.accent }}
-                  thumbColor={Theme.colors.primary}
-                />
+                  />
               </View>
             </View>
 
@@ -472,14 +603,83 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity onPress={handleDeleteAccount} style={styles.deleteBtn} hitSlop={8}>
-              <Text style={styles.deleteBtnText}>delete account</Text>
+            <TouchableOpacity onPress={handleSignOut} style={styles.signOutBtn} activeOpacity={0.8}>
+              <Text style={styles.signOutBtnText}>sign out</Text>
             </TouchableOpacity>
 
             <Text style={styles.version}>muse v{Constants.expoConfig?.version ?? '1.0.0'}</Text>
+
+            <TouchableOpacity onPress={handleDeleteAccount} style={styles.deleteBtn} hitSlop={8}>
+              <Text style={styles.deleteBtnText}>delete account</Text>
+            </TouchableOpacity>
           </>
         )}
-      </ScrollView>
+      </Animated.ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* Stats popup modal */}
+      <Modal visible={popupType !== null} animationType="slide" presentationStyle="pageSheet">
+        <SafeAreaView style={styles.safe}>
+          <View style={styles.popupHeader}>
+            <View style={{ width: 40 }} />
+            <Text style={styles.popupTitle}>{popupType ?? ''}</Text>
+            <TouchableOpacity onPress={() => setPopupType(null)} hitSlop={12}>
+              <Text style={styles.popupClose}>done</Text>
+            </TouchableOpacity>
+          </View>
+          {popupLoading ? (
+            <View style={styles.popupCenter}>
+              <ActivityIndicator color={Theme.colors.brandWarm} />
+            </View>
+          ) : popupType === 'communities' ? (
+            <ScrollView contentContainerStyle={styles.popupList}>
+              {communities.length === 0 ? (
+                <Text style={styles.popupEmpty}>no communities yet</Text>
+              ) : communities.map(c => (
+                <TouchableOpacity
+                  key={c.id}
+                  style={styles.popupRow}
+                  onPress={() => { setPopupType(null); router.push({ pathname: '/community/[id]' as any, params: { id: c.id } }); }}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.popupIconCircle}>
+                    <Feather name="users" size={14} color={Theme.colors.accent} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.popupName}>{c.name}</Text>
+                    {c.description ? <Text style={styles.popupSub} numberOfLines={1}>{c.description}</Text> : null}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : (
+            <ScrollView contentContainerStyle={styles.popupList}>
+              {popupProfiles.length === 0 ? (
+                <Text style={styles.popupEmpty}>no {popupType} yet</Text>
+              ) : popupProfiles.map(p => (
+                <TouchableOpacity
+                  key={p.id}
+                  style={styles.popupRow}
+                  onPress={() => { setPopupType(null); router.push({ pathname: '/profile/[userId]' as any, params: { userId: p.id } }); }}
+                  activeOpacity={0.7}
+                >
+                  {p.avatar_url ? (
+                    <Image source={{ uri: p.avatar_url }} style={styles.popupAvatar} cachePolicy="disk" />
+                  ) : (
+                    <View style={styles.popupAvatarPlaceholder}>
+                      <Text style={styles.popupAvatarInitial}>{(p.display_name ?? p.username ?? '?')[0].toUpperCase()}</Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.popupName}>{p.display_name ?? p.username}</Text>
+                    <Text style={styles.popupSub}>@{p.username}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -487,19 +687,21 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Theme.colors.background },
   header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12,
+    paddingHorizontal: 16, paddingTop: 8,
   },
+  headerCenter: { alignItems: 'center' },
+  headerLeft: { position: 'absolute', left: 16, top: 8 },
+  headerRight: { position: 'absolute', right: 16, top: 10 },
   backText: { fontSize: Theme.font.base, color: Theme.colors.primary, fontWeight: '600' },
   headerTitle: {
-    fontFamily: 'Caprasimo_400Regular', fontSize: 22,
+    fontFamily: 'Caprasimo_400Regular',
     color: Theme.colors.primary, letterSpacing: -0.3,
   },
-  signOutText: { fontSize: Theme.font.sm, color: '#D9534F', fontWeight: '500' },
+  headerUsername: { color: Theme.colors.secondary, marginTop: 1 },
 
   content: { paddingHorizontal: 20, paddingBottom: 60, alignItems: 'center' },
 
-  avatarArea: { marginTop: 12, marginBottom: 14, position: 'relative' },
+  avatarArea: { marginTop: 4, marginBottom: 10, position: 'relative' },
   avatar: { width: 88, height: 88, borderRadius: 44 },
   avatarPlaceholder: {
     width: 88, height: 88, borderRadius: 44,
@@ -516,35 +718,26 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: Theme.colors.background,
   },
 
-  displayName: {
-    fontSize: Theme.font.xl, fontWeight: '800',
-    color: Theme.colors.primary, letterSpacing: -0.5, textAlign: 'center',
-  },
-  username: { fontSize: Theme.font.sm, color: Theme.colors.secondary, marginTop: 2 },
-
-  nameEditRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  nameInput: {
-    fontSize: Theme.font.xl, fontWeight: '800', color: Theme.colors.primary,
+  headerTitleInput: {
+    fontFamily: 'Caprasimo_400Regular', fontSize: 28,
+    color: Theme.colors.primary, letterSpacing: -0.3,
     borderBottomWidth: 1.5, borderBottomColor: Theme.colors.accent,
-    minWidth: 160, paddingBottom: 2,
+    paddingBottom: 2, minWidth: 120,
   },
-  nameSaveBtn: {
-    backgroundColor: Theme.colors.accent, borderRadius: Theme.radius.sm,
-    paddingHorizontal: 12, paddingVertical: 6,
-  },
-  nameSaveBtnText: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.background },
-
-  usernameAt: { fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.secondary },
-  usernameInput: {
-    fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.secondary,
+  headerUsernameRow: { flexDirection: 'row', alignItems: 'center', marginTop: 1 },
+  headerUsernameAt: { fontSize: 14, color: Theme.colors.secondary },
+  headerUsernameInput: {
+    fontSize: 14, color: Theme.colors.secondary,
     borderBottomWidth: 1.5, borderBottomColor: Theme.colors.accent,
-    minWidth: 100, paddingBottom: 2,
+    paddingBottom: 1, minWidth: 80,
   },
+  headerSaveText: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.accent },
 
-  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  nameBlock: { flexDirection: 'row', alignItems: 'flex-start', width: '100%' },
-  nameBlockSpacer: { width: 28 },
-  nameEditIcon: { width: 28, paddingTop: 6, alignItems: 'center' },
+  bioRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, width: '100%',
+  },
+  bioEditWrap: { width: '100%', alignItems: 'flex-end' },
 
   statsCard: {
     width: '100%', borderRadius: Theme.radius.lg,
@@ -571,7 +764,13 @@ const styles = StyleSheet.create({
 
   rowDivider: { height: 1, backgroundColor: Theme.colors.border },
 
-  deleteBtn: { marginTop: 32 },
+  signOutBtn: {
+    marginTop: 32, alignSelf: 'center',
+    backgroundColor: Theme.colors.brandWarm, borderRadius: 100,
+    paddingHorizontal: 24, paddingVertical: 10,
+  },
+  signOutBtnText: { fontSize: Theme.font.sm, fontWeight: '700', color: '#fff' },
+  deleteBtn: { marginTop: 20 },
   deleteBtnText: { fontSize: Theme.font.sm, color: '#C0392B', fontWeight: '500', textAlign: 'center' },
 
   version: { marginTop: 16, fontSize: Theme.font.xs, color: Theme.colors.disabled, textAlign: 'center' },
@@ -588,7 +787,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: Theme.colors.border,
     padding: 10, textAlignVertical: 'top',
   },
-  bioText: { fontSize: Theme.font.sm, color: Theme.colors.primary, textAlign: 'center', lineHeight: 20 },
+  bioText: { fontSize: Theme.font.base, fontWeight: '500', color: Theme.colors.primary, textAlign: 'center', lineHeight: 21, marginTop: 10 },
   bioPlaceholder: { fontSize: Theme.font.sm, color: Theme.colors.disabled, textAlign: 'center' },
   bioCharCount: { fontSize: Theme.font.xs, color: Theme.colors.disabled },
 
@@ -615,10 +814,69 @@ const styles = StyleSheet.create({
   },
   tagChipSelectedText: { fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.primary },
 
+  feedbackCard: {
+    width: '100%', marginTop: 20,
+    borderRadius: Theme.radius.lg,
+    padding: 20, alignItems: 'center', gap: 10,
+  },
+  feedbackTitle: {
+    fontFamily: 'Caprasimo_400Regular',
+    fontSize: Theme.font.base, color: Theme.colors.primary,
+    textAlign: 'center',
+  },
+  feedbackSub: {
+    fontSize: Theme.font.xs, color: 'rgba(0,0,0,0.55)',
+    textAlign: 'center', lineHeight: 17,
+  },
+  feedbackInput: {
+    width: '100%', minHeight: 72, fontSize: Theme.font.sm, color: Theme.colors.primary,
+    backgroundColor: 'rgba(255,255,255,0.6)', borderRadius: Theme.radius.md,
+    padding: 12, textAlignVertical: 'top', marginTop: 4,
+  },
+  feedbackBtn: {
+    backgroundColor: 'rgba(255,255,255,0.75)', borderRadius: 100,
+    paddingHorizontal: 20, paddingVertical: 10,
+  },
+  feedbackBtnText: {
+    fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.primary,
+  },
+
   settingsHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     alignSelf: 'flex-start', marginTop: 28, paddingVertical: 4,
   },
   settingsHeaderText: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.secondary, textTransform: 'uppercase', letterSpacing: 1 },
 
+  // Popup modal
+  popupHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Theme.colors.border,
+  },
+  popupTitle: {
+    fontFamily: 'Caprasimo_400Regular', fontSize: 20,
+    color: Theme.colors.primary, textAlign: 'center', flex: 1,
+  },
+  popupClose: { fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.accent, width: 40, textAlign: 'right' },
+  popupCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  popupList: { padding: 16 },
+  popupEmpty: { fontSize: Theme.font.sm, color: Theme.colors.secondary, textAlign: 'center', marginTop: 32 },
+  popupRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Theme.colors.border,
+  },
+  popupAvatar: { width: 40, height: 40, borderRadius: 20 },
+  popupAvatarPlaceholder: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: Theme.colors.surface, borderWidth: 1, borderColor: Theme.colors.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  popupAvatarInitial: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.primary },
+  popupIconCircle: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: Theme.colors.surface, borderWidth: 1, borderColor: Theme.colors.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  popupName: { fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.primary },
+  popupSub: { fontSize: Theme.font.xs, color: Theme.colors.secondary, marginTop: 1 },
 });

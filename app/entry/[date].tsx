@@ -1,8 +1,8 @@
 import { useCallback, useRef, useState } from 'react';
+import { Image } from 'expo-image';
 import {
   View,
   Text,
-  Image,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -337,7 +337,7 @@ export default function EntryScreen() {
   const renderPanelCommentItem = (c: Comment, isReply: boolean, topLevelId: string, topLevelUsername: string) => (
     <View style={isReply ? styles.cPanelReplyRow : styles.cPanelCommentRow}>
       {c.profile?.avatar_url ? (
-        <Image source={{ uri: c.profile.avatar_url }} style={isReply ? styles.cPanelReplyAvatar : styles.cPanelCommentAvatar} />
+        <Image source={{ uri: c.profile.avatar_url }} style={isReply ? styles.cPanelReplyAvatar : styles.cPanelCommentAvatar} cachePolicy="disk" />
       ) : (
         <View style={isReply ? styles.cPanelReplyAvatarPlaceholder : styles.cPanelCommentAvatarPlaceholder}>
           <Text style={styles.cPanelAvatarInitial}>
@@ -438,6 +438,7 @@ export default function EntryScreen() {
           <View style={styles.photoContainer}>
             <Image
               source={{ uri: post.photo_url }}
+                cachePolicy="disk"
               style={[styles.photo, { width: photoWidth, height: photoHeight }]}
               resizeMode="cover"
             />
@@ -602,7 +603,7 @@ export default function EntryScreen() {
                       activeOpacity={0.8}
                     >
                       {item.generated_image_url ? (
-                        <Image source={{ uri: item.generated_image_url }} style={styles.itemImage} resizeMode="cover" />
+                        <Image source={{ uri: item.generated_image_url }} style={styles.itemImage} resizeMode="cover" cachePolicy="disk" />
                       ) : (
                         <View style={[styles.itemImage, styles.itemPlaceholder]}>
                           <Text style={styles.itemEmoji}>🏷️</Text>
@@ -690,7 +691,7 @@ export default function EntryScreen() {
                     {topLevelComments.slice(0, 2).map(comment => (
                       <View key={comment.id} style={styles.commentRow}>
                         {comment.profile?.avatar_url ? (
-                          <Image source={{ uri: comment.profile.avatar_url }} style={styles.commentAvatarImg} />
+                          <Image source={{ uri: comment.profile.avatar_url }} style={styles.commentAvatarImg} cachePolicy="disk" />
                         ) : (
                           <View style={styles.commentAvatarPlaceholder}>
                             <Text style={styles.commentAvatarInitial}>
@@ -774,7 +775,7 @@ export default function EntryScreen() {
                 activeOpacity={0.7}
               >
                 {p.avatar_url ? (
-                  <Image source={{ uri: p.avatar_url }} style={styles.likerAvatar} />
+                  <Image source={{ uri: p.avatar_url }} style={styles.likerAvatar} cachePolicy="disk" />
                 ) : (
                   <View style={styles.likerAvatarPlaceholder}>
                     <Text style={styles.likerAvatarInitial}>{(p.display_name ?? p.username)[0].toUpperCase()}</Text>
@@ -943,7 +944,7 @@ export default function EntryScreen() {
                     }}
                   >
                     {imgUrl ? (
-                      <Image source={{ uri: imgUrl }} style={styles.sheetCellImage} resizeMode="contain" />
+                      <Image source={{ uri: imgUrl }} style={styles.sheetCellImage} resizeMode="contain" cachePolicy="disk" />
                     ) : (
                       <View style={[styles.sheetCellImage, styles.sheetCellPlaceholder]}>
                         <Text style={{ fontSize: 28 }}>🏷️</Text>
@@ -1009,7 +1010,7 @@ export default function EntryScreen() {
                   activeOpacity={0.8}
                 >
                   {imgUrl ? (
-                    <Image source={{ uri: imgUrl }} style={styles.sheetCellImage} resizeMode="contain" />
+                    <Image source={{ uri: imgUrl }} style={styles.sheetCellImage} resizeMode="contain" cachePolicy="disk" />
                   ) : (
                     <View style={[styles.sheetCellImage, styles.sheetCellPlaceholder]}>
                       <Text style={{ fontSize: 28 }}>🏷️</Text>
@@ -1045,7 +1046,7 @@ export default function EntryScreen() {
                     activeOpacity={0.85}
                   >
                     {imgUrl ? (
-                      <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" />
+                      <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" cachePolicy="disk" />
                     ) : (
                       <View style={[styles.mergeCompareImg, styles.sheetCellPlaceholder]}>
                         <Text style={{ fontSize: 36 }}>🏷️</Text>
@@ -1454,7 +1455,7 @@ const styles = StyleSheet.create({
     textAlign: 'center', lineHeight: 18, marginBottom: 20,
   },
   mergeConfirmBtn: { borderRadius: Theme.radius.md, paddingVertical: 16, alignItems: 'center' },
-  mergeConfirmBtnText: { fontSize: Theme.font.base, fontWeight: '700', color: '#7C3060' },
+  mergeConfirmBtnText: { fontSize: Theme.font.base, fontWeight: '700', color: Theme.colors.primary },
 
   hiddenBadgeText: { fontSize: Theme.font.xs, color: 'rgba(0,0,0,0.4)', fontWeight: '500' },
 });

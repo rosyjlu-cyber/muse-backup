@@ -363,7 +363,7 @@ export default function OnboardingScreen() {
 
   const handleShareCommunity = async (community: Community) => {
     try {
-      await Share.share({ message: `join my community "${community.name}" on muse! https://museapp.com/c/${community.slug}` });
+      await Share.share({ message: `join my community "${community.name}" on muse! https://bemymuse.app/c/${community.slug}` });
     } catch {}
   };
 
@@ -603,7 +603,7 @@ export default function OnboardingScreen() {
           <View style={{ marginBottom: 20 }}>
             <TouchableOpacity style={[styles.avatarPicker, { marginTop: 8 }]} onPress={handlePickAvatar} activeOpacity={0.8}>
               {avatarUri
-                ? <Image source={{ uri: avatarUri }} style={styles.avatarImg} />
+                ? <Image source={{ uri: avatarUri }} style={styles.avatarImg} cachePolicy="disk" />
                 : (
                   <View style={styles.avatarPlaceholder}>
                     <LinearGradient colors={ACCENT_GRAD} style={StyleSheet.absoluteFill} />
@@ -834,7 +834,7 @@ export default function OnboardingScreen() {
                 <Ionicons name="share-outline" size={15} color={Theme.colors.accent} />
                 <Text style={styles.inviteActionText}>share link</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.inviteActionBtn} onPress={() => Linking.openURL(`sms:&body=join my community "${createdCommunity.name}" on muse! https://museapp.com/c/${createdCommunity.slug}`)}>
+              <TouchableOpacity style={styles.inviteActionBtn} onPress={() => Linking.openURL(`sms:&body=join my community "${createdCommunity.name}" on muse! https://bemymuse.app/c/${createdCommunity.slug}`)}>
                 <Ionicons name="chatbubble-outline" size={15} color={Theme.colors.accent} />
                 <Text style={styles.inviteActionText}>invite via SMS</Text>
               </TouchableOpacity>

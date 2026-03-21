@@ -59,6 +59,7 @@ export interface Community {
   description: string | null;
   created_by: string;
   is_private: boolean;
+  avatar_url: string | null;
   created_at: string;
   member_count?: number;
   is_member?: boolean;
@@ -67,7 +68,7 @@ export interface Community {
 
 export interface AppNotification {
   id: string;
-  type: 'like' | 'comment' | 'new_follower' | 'streak' | 'follow_accepted';
+  type: 'like' | 'comment' | 'new_follower' | 'streak' | 'follow_accepted' | 'community_invite' | 'community_accepted';
   actor_id: string | null;
   post_id: string | null;
   data: Record<string, any>;
@@ -120,6 +121,8 @@ export interface FeedFilters {
   dateRange?: "week" | "month"; // relative range (mutually exclusive with date)
   communityId?: string;
   tag?: string;
+  search?: string; // free text — matches caption, tags, username
+  explore?: boolean; // when true, show all public posts (not just followed)
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -250,12 +253,28 @@ export async function uploadAvatar(
   const ext = localUri.split(".").pop()?.split("?")[0] ?? "jpg";
   const path = `avatars/${userId}.${ext}`;
   const fileData = await uriToBlob(localUri);
+  await supabase.storage.from("outfit-photos").remove([path]);
   const { error } = await supabase.storage
     .from("outfit-photos")
-    .upload(path, fileData, { upsert: true, contentType: `image/${ext}` });
+    .upload(path, fileData, { contentType: `image/${ext}` });
   if (error) throw error;
   const { data } = supabase.storage.from("outfit-photos").getPublicUrl(path);
-  return data.publicUrl;
+  return `${data.publicUrl}?t=${Date.now()}`;
+}
+
+export async function uploadCommunityAvatar(
+  communityId: string,
+  localUri: string,
+): Promise<string> {
+  const path = `communities/${communityId}.jpg`;
+  const fileData = await uriToBlob(localUri);
+  await supabase.storage.from('outfit-photos').remove([path]);
+  const { error } = await supabase.storage
+    .from('outfit-photos')
+    .upload(path, fileData, { contentType: 'image/jpeg' });
+  if (error) throw error;
+  const { data } = supabase.storage.from('outfit-photos').getPublicUrl(path);
+  return `${data.publicUrl}?t=${Date.now()}`;
 }
 
 // ─── Follows ──────────────────────────────────────────────────────────────────
@@ -296,6 +315,48 @@ export async function isFollowing(userId: string): Promise<boolean> {
     .eq("following_id", userId)
     .maybeSingle();
   return !!data;
+}
+
+export async function getFollowers(userId: string): Promise<Profile[]> {
+  const { data } = await supabase
+    .from('follows')
+    .select('follower_id')
+    .eq('following_id', userId);
+  if (!data?.length) return [];
+  const ids = data.map(r => r.follower_id);
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('*')
+    .in('id', ids);
+  return (profiles ?? []) as Profile[];
+}
+
+export async function getFollowing(userId: string): Promise<Profile[]> {
+  const { data } = await supabase
+    .from('follows')
+    .select('following_id')
+    .eq('follower_id', userId);
+  if (!data?.length) return [];
+  const ids = data.map(r => r.following_id);
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('*')
+    .in('id', ids);
+  return (profiles ?? []) as Profile[];
+}
+
+export async function getMutualFollows(): Promise<Profile[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+  const [{ data: followers }, { data: following }] = await Promise.all([
+    supabase.from('follows').select('follower_id').eq('following_id', user.id),
+    supabase.from('follows').select('following_id').eq('follower_id', user.id),
+  ]);
+  const followerIds = new Set((followers ?? []).map(r => r.follower_id));
+  const mutualIds = (following ?? []).map(r => r.following_id).filter(id => followerIds.has(id));
+  if (!mutualIds.length) return [];
+  const { data: profiles } = await supabase.from('profiles').select('*').in('id', mutualIds);
+  return (profiles ?? []) as Profile[];
 }
 
 // ─── Follow Requests ──────────────────────────────────────────────────────────
@@ -511,10 +572,33 @@ export async function deletePost(postId: string): Promise<void> {
 
 // ─── Feed ─────────────────────────────────────────────────────────────────────
 
-export async function getFeed(filters: FeedFilters = {}): Promise<Post[]> {
+const FEED_PAGE_SIZE = 20;
+
+export async function getFeed(filters: FeedFilters = {}, cursor?: string): Promise<{ posts: Post[]; nextCursor?: string }> {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  // Build the set of user IDs whose posts should appear in the feed:
+  // people you follow + members of your communities + yourself
+  const feedUserIds = new Set<string>();
+  if (user) {
+    feedUserIds.add(user.id);
+    const [{ data: following }, { data: myMemberships }] = await Promise.all([
+      supabase.from('follows').select('following_id').eq('follower_id', user.id),
+      supabase.from('community_members').select('community_id').eq('user_id', user.id),
+    ]);
+    (following ?? []).forEach((r: any) => feedUserIds.add(r.following_id));
+
+    if (myMemberships?.length) {
+      const communityIds = myMemberships.map((m: any) => m.community_id);
+      const { data: communityMembers } = await supabase
+        .from('community_members')
+        .select('user_id')
+        .in('community_id', communityIds);
+      (communityMembers ?? []).forEach((m: any) => feedUserIds.add(m.user_id));
+    }
+  }
 
   let query = supabase
     .from("posts")
@@ -522,10 +606,20 @@ export async function getFeed(filters: FeedFilters = {}): Promise<Post[]> {
       "*, profile:profiles!posts_user_id_fkey(username, display_name, avatar_url, is_public)",
     )
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(FEED_PAGE_SIZE + 1); // fetch one extra to detect if there's a next page
 
   // Exclude all private posts from the feed (for everyone, including the owner)
   query = query.eq("is_private", false);
+
+  // Cursor-based pagination
+  if (cursor) {
+    query = query.lt("created_at", cursor);
+  }
+
+  // Only show posts from followed users + community members (unless exploring)
+  if (!filters.explore && feedUserIds.size > 0) {
+    query = query.in("user_id", [...feedUserIds]);
+  }
 
   if (filters.date) {
     query = query.eq("date", filters.date);
@@ -544,7 +638,7 @@ export async function getFeed(filters: FeedFilters = {}): Promise<Post[]> {
   }
 
   if (filters.communityId) {
-    // Get member IDs of this community, then filter posts
+    // Further narrow to just this community's members
     const { data: members } = await supabase
       .from("community_members")
       .select("user_id")
@@ -552,17 +646,36 @@ export async function getFeed(filters: FeedFilters = {}): Promise<Post[]> {
     const memberIds = (members ?? []).map(
       (m: { user_id: string }) => m.user_id,
     );
-    if (memberIds.length === 0) return [];
+    if (memberIds.length === 0) return { posts: [], nextCursor: undefined };
     query = query.in("user_id", memberIds);
   }
 
   const { data, error } = await query;
   if (error) throw error;
   const allPosts = (data ?? []) as Post[];
+
+  // Check if there's a next page
+  const hasMore = allPosts.length > FEED_PAGE_SIZE;
+  const pagePosts = hasMore ? allPosts.slice(0, FEED_PAGE_SIZE) : allPosts;
+
   // Exclude posts from private-profile users (unless it's your own post)
-  const posts = allPosts.filter(
+  let posts = pagePosts.filter(
     (p) => p.profile?.is_public === true || p.user_id === user?.id,
   );
+
+  // Client-side search filtering
+  if (filters.search) {
+    const q = filters.search.toLowerCase();
+    posts = posts.filter(p =>
+      (p.caption?.toLowerCase().includes(q)) ||
+      (p.tags ?? []).some(t => t.toLowerCase().includes(q)) ||
+      (p.profile?.username?.toLowerCase().includes(q)) ||
+      (p.profile?.display_name?.toLowerCase().includes(q))
+    );
+  }
+
+  const nextCursor = hasMore ? pagePosts[pagePosts.length - 1].created_at : undefined;
+
   if (user && posts.length > 0) {
     const postIds = posts.map((p) => p.id);
     const [{ data: likedRows, error: likesErr }, { data: savedRows }] = await Promise.all([
@@ -571,13 +684,13 @@ export async function getFeed(filters: FeedFilters = {}): Promise<Post[]> {
     ]);
     if (likesErr) {
       console.warn("liked_by_me fetch error:", likesErr.message);
-      return posts;
+      return { posts, nextCursor };
     }
     const likedSet = new Set((likedRows ?? []).map((r: any) => r.post_id));
     const savedSet = new Set((savedRows ?? []).map((r: any) => r.post_id));
-    return posts.map((p) => ({ ...p, liked_by_me: likedSet.has(p.id), saved_by_me: savedSet.has(p.id) }));
+    return { posts: posts.map((p) => ({ ...p, liked_by_me: likedSet.has(p.id), saved_by_me: savedSet.has(p.id) })), nextCursor };
   }
-  return posts;
+  return { posts, nextCursor };
 }
 
 // ─── Communities ──────────────────────────────────────────────────────────────
@@ -592,7 +705,46 @@ export async function getMyCommunities(): Promise<Community[]> {
     .select("community:communities(*)")
     .eq("user_id", user.id);
   if (error) throw error;
-  return (data ?? []).map((row: any) => row.community) as Community[];
+  const communities = (data ?? []).map((row: any) => row.community) as Community[];
+  if (communities.length === 0) return communities;
+
+  // Order by most recent post from community members
+  const communityIds = communities.map(c => c.id);
+  const { data: memberRows } = await supabase
+    .from("community_members")
+    .select("community_id, user_id")
+    .in("community_id", communityIds);
+  const membersByCommunity = new Map<string, string[]>();
+  for (const r of (memberRows ?? []) as any[]) {
+    const arr = membersByCommunity.get(r.community_id) ?? [];
+    arr.push(r.user_id);
+    membersByCommunity.set(r.community_id, arr);
+  }
+  const allMemberIds = [...new Set((memberRows ?? []).map((r: any) => r.user_id))];
+  const { data: recentPosts } = await supabase
+    .from("posts")
+    .select("user_id, created_at")
+    .in("user_id", allMemberIds)
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  // Find most recent post date per community
+  const latestByCommunity = new Map<string, string>();
+  for (const [cid, members] of membersByCommunity) {
+    const memberSet = new Set(members);
+    for (const post of (recentPosts ?? []) as any[]) {
+      if (memberSet.has(post.user_id)) {
+        latestByCommunity.set(cid, post.created_at);
+        break;
+      }
+    }
+  }
+
+  return communities.sort((a, b) => {
+    const aDate = latestByCommunity.get(a.id) ?? '';
+    const bDate = latestByCommunity.get(b.id) ?? '';
+    return bDate.localeCompare(aDate);
+  });
 }
 
 export async function getAllCommunities(): Promise<Community[]> {
@@ -607,17 +759,33 @@ export async function getAllCommunities(): Promise<Community[]> {
 
   if (!user || !data) return (data ?? []) as Community[];
 
+  // Fetch member counts
+  const { data: countRows } = await supabase
+    .from('community_members')
+    .select('community_id');
+  const countMap: Record<string, number> = {};
+  (countRows ?? []).forEach((r: any) => { countMap[r.community_id] = (countMap[r.community_id] ?? 0) + 1; });
+
   const [{ data: memberships }, { data: requests }] = await Promise.all([
     supabase.from("community_members").select("community_id").eq("user_id", user.id),
     supabase.from("community_requests").select("community_id").eq("user_id", user.id),
   ]);
   const memberSet = new Set((memberships ?? []).map((m: any) => m.community_id));
   const pendingSet = new Set((requests ?? []).map((r: any) => r.community_id));
-  return data.map((c) => ({
+  const mapped = data.map((c) => ({
     ...c,
+    member_count: countMap[c.id] ?? 0,
     is_member: memberSet.has(c.id),
     join_status: memberSet.has(c.id) ? 'member' : pendingSet.has(c.id) ? 'pending' : 'none',
   })) as Community[];
+  // Show user's communities first, then sort by member count
+  mapped.sort((a, b) => {
+    const aMe = a.is_member ? 1 : 0;
+    const bMe = b.is_member ? 1 : 0;
+    if (aMe !== bMe) return bMe - aMe;
+    return (b.member_count ?? 0) - (a.member_count ?? 0);
+  });
+  return mapped;
 }
 
 export async function getCommunity(id: string): Promise<Community | null> {
@@ -686,6 +854,7 @@ export async function createCommunity(input: {
   name: string;
   slug: string;
   description: string;
+  is_private?: boolean;
 }): Promise<Community> {
   const {
     data: { user },
@@ -701,6 +870,17 @@ export async function createCommunity(input: {
   await supabase
     .from("community_members")
     .insert({ community_id: data.id, user_id: user.id, role: "admin" });
+  return data as Community;
+}
+
+export async function updateCommunity(id: string, updates: { is_private?: boolean; name?: string; description?: string | null; avatar_url?: string | null }): Promise<Community> {
+  const { data, error } = await supabase
+    .from('communities')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
   return data as Community;
 }
 
@@ -778,6 +958,13 @@ export async function unlikePost(postId: string): Promise<void> {
     .eq("post_id", postId)
     .eq("user_id", user.id);
   if (error) throw error;
+  // remove the like notification
+  await supabase
+    .from("notifications")
+    .delete()
+    .eq("type", "like")
+    .eq("actor_id", user.id)
+    .eq("post_id", postId);
 }
 
 // ─── Saves ────────────────────────────────────────────────────────────────────
@@ -1175,24 +1362,34 @@ export async function getItemPosts(itemId: string): Promise<Post[]> {
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 
-export async function getNotifications(): Promise<AppNotification[]> {
+const NOTIF_PAGE_SIZE = 20;
+
+export async function getNotifications(cursor?: string): Promise<{ notifications: AppNotification[]; nextCursor?: string }> {
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return [];
-  const { data: rows, error } = await supabase
+  if (!user) return { notifications: [] };
+  let q = supabase
     .from('notifications')
     .select('*')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
-    .limit(60);
-  if (error || !rows || rows.length === 0) return rows as AppNotification[] ?? [];
+    .limit(NOTIF_PAGE_SIZE + 1);
+  if (cursor) q = q.lt('created_at', cursor);
+  const { data: rows, error } = await q;
+  if (error || !rows || rows.length === 0) return { notifications: [] };
 
-  const actorIds = [...new Set(rows.map((r: any) => r.actor_id).filter(Boolean))];
+  const hasMore = rows.length > NOTIF_PAGE_SIZE;
+  const page = hasMore ? rows.slice(0, NOTIF_PAGE_SIZE) : rows;
+
+  const actorIds = [...new Set(page.map((r: any) => r.actor_id).filter(Boolean))];
   const { data: profiles } = actorIds.length
     ? await supabase.from('profiles').select('id, username, display_name, avatar_url').in('id', actorIds)
     : { data: [] };
   const profileMap = Object.fromEntries((profiles ?? []).map((p: any) => [p.id, p]));
 
-  return rows.map((r: any) => ({ ...r, actor: r.actor_id ? profileMap[r.actor_id] : undefined }));
+  return {
+    notifications: page.map((r: any) => ({ ...r, actor: r.actor_id ? profileMap[r.actor_id] : undefined })),
+    nextCursor: hasMore ? page[page.length - 1].created_at : undefined,
+  };
 }
 
 export async function getNotificationsBadgeCount(): Promise<{ followRequests: number; unread: number }> {
@@ -1256,11 +1453,172 @@ export async function getCommunityRequests(communityId: string): Promise<Communi
 }
 
 export async function resolveCommunityRequest(communityId: string, userId: string, accept: boolean): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
   if (accept) {
     const { error } = await supabase.from('community_members').insert({ community_id: communityId, user_id: userId });
     if (error) throw error;
+    // Notify the requester that they were accepted
+    if (user) {
+      await supabase.from('notifications').insert({
+        user_id: userId,
+        type: 'community_accepted',
+        actor_id: user.id,
+        data: { community_id: communityId },
+      });
+    }
   }
   await supabase.from('community_requests').delete().eq('community_id', communityId).eq('user_id', userId);
+}
+
+// ─── Search / Discover ────────────────────────────────────────────────────────
+
+export async function searchPosts(query: string): Promise<Post[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  const q = query.toLowerCase();
+
+  // 1. Direct post matches (caption, tags)
+  const { data: directData } = await supabase
+    .from('posts')
+    .select('*, profile:profiles!posts_user_id_fkey(username, display_name, avatar_url, is_public)')
+    .eq('is_private', false)
+    .or(`caption.ilike.%${query}%,tags.cs.{${q}}`)
+    .order('created_at', { ascending: false })
+    .limit(50);
+
+  // 2. Posts via wardrobe items (label, brand, category, description)
+  const { data: itemLinks } = await supabase
+    .from('post_wardrobe_items')
+    .select('post_id, item:wardrobe_items!inner(label, brand, category, description)')
+    .or(`label.ilike.%${query}%,brand.ilike.%${query}%,category.ilike.%${query}%,description.ilike.%${query}%`, { referencedTable: 'wardrobe_items' })
+    .limit(100);
+
+  const itemPostIds = [...new Set((itemLinks ?? []).map((r: any) => r.post_id))];
+
+  // Fetch posts matched via items (exclude ones already in direct results)
+  const directIds = new Set((directData ?? []).map((p: any) => p.id));
+  const missingIds = itemPostIds.filter(id => !directIds.has(id));
+  let itemPosts: Post[] = [];
+  if (missingIds.length > 0) {
+    const { data: extraData } = await supabase
+      .from('posts')
+      .select('*, profile:profiles!posts_user_id_fkey(username, display_name, avatar_url, is_public)')
+      .eq('is_private', false)
+      .in('id', missingIds)
+      .order('created_at', { ascending: false });
+    itemPosts = (extraData ?? []) as Post[];
+  }
+
+  // Merge and deduplicate
+  const allPosts = [...((directData ?? []) as Post[]), ...itemPosts];
+  const posts = allPosts.filter(p => p.profile?.is_public === true || p.user_id === user?.id);
+
+  if (user && posts.length > 0) {
+    const postIds = posts.map(p => p.id);
+    const [{ data: likedRows }, { data: savedRows }] = await Promise.all([
+      supabase.from('likes').select('post_id').eq('user_id', user.id).in('post_id', postIds),
+      supabase.from('saves').select('post_id').eq('user_id', user.id).in('post_id', postIds),
+    ]);
+    const likedSet = new Set((likedRows ?? []).map((r: any) => r.post_id));
+    const savedSet = new Set((savedRows ?? []).map((r: any) => r.post_id));
+    return posts.map(p => ({ ...p, liked_by_me: likedSet.has(p.id), saved_by_me: savedSet.has(p.id) }));
+  }
+  return posts;
+}
+
+export async function searchCommunities(query: string): Promise<Community[]> {
+  const { data } = await supabase
+    .from('communities')
+    .select('*')
+    .ilike('name', `%${query}%`)
+    .limit(20);
+  return (data ?? []) as Community[];
+}
+
+// ─── Community Members & Admin ────────────────────────────────────────────────
+
+export interface CommunityMember {
+  user_id: string;
+  role: string;
+  profile: Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_url'>;
+}
+
+export async function getCommunityMembers(communityId: string): Promise<CommunityMember[]> {
+  const { data, error } = await supabase
+    .from('community_members')
+    .select('user_id, role, profiles:user_id(id, username, display_name, avatar_url)')
+    .eq('community_id', communityId);
+  if (error) throw error;
+  return (data ?? []).map((m: any) => ({
+    user_id: m.user_id,
+    role: m.role ?? 'member',
+    profile: m.profiles,
+  }));
+}
+
+export async function getMyRoleInCommunity(communityId: string): Promise<string | null> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data } = await supabase
+    .from('community_members')
+    .select('role')
+    .eq('community_id', communityId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  return data?.role ?? null;
+}
+
+export async function promoteToAdmin(communityId: string, userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('community_members')
+    .update({ role: 'admin' })
+    .eq('community_id', communityId)
+    .eq('user_id', userId);
+  if (error) throw error;
+}
+
+export async function demoteFromAdmin(communityId: string, userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('community_members')
+    .update({ role: 'member' })
+    .eq('community_id', communityId)
+    .eq('user_id', userId);
+  if (error) throw error;
+}
+
+export async function removeMember(communityId: string, userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('community_members')
+    .delete()
+    .eq('community_id', communityId)
+    .eq('user_id', userId);
+  if (error) throw error;
+}
+
+export async function searchProfiles(query: string): Promise<Profile[]> {
+  const { data } = await supabase
+    .from('profiles')
+    .select('*')
+    .or(`username.ilike.%${query}%,display_name.ilike.%${query}%`)
+    .limit(20);
+  return (data ?? []) as Profile[];
+}
+
+export async function inviteUserToCommunity(communityId: string, userId: string): Promise<void> {
+  // Direct add for now — admin invites skip the request flow
+  const { error } = await supabase
+    .from('community_members')
+    .insert({ community_id: communityId, user_id: userId });
+  if (error) throw error;
+  // Notify the invited user
+  const { data: { user } } = await supabase.auth.getUser();
+  if (user) {
+    await supabase.from('notifications').insert({
+      user_id: userId,
+      type: 'community_invite',
+      actor_id: user.id,
+      data: { community_id: communityId },
+    });
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1299,4 +1657,35 @@ async function uriToBlob(uri: string): Promise<ArrayBuffer | Blob> {
   // On web, blob() is fine and more efficient.
   if (Platform.OS === "web") return response.blob();
   return response.arrayBuffer();
+}
+
+// ── Referrals ──────────────────────────────────────────────
+
+export async function createReferral(phone: string): Promise<void> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("not logged in");
+  // Normalize phone: strip non-digits
+  const normalized = phone.replace(/\D/g, "");
+  const { error } = await supabase
+    .from("referrals")
+    .upsert(
+      { inviter_id: user.id, invited_phone: normalized },
+      { onConflict: "inviter_id,invited_phone" }
+    );
+  if (error) throw error;
+}
+
+export async function getMyReferralCount(): Promise<number> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return 0;
+  const { count } = await supabase
+    .from("referrals")
+    .select("*", { count: "exact", head: true })
+    .eq("inviter_id", user.id)
+    .eq("status", "accepted");
+  return count ?? 0;
 }

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "muse-outfit-journal",
+    "name": "Muse",
     "slug": "muse-outfit-journal",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -13,9 +13,14 @@
       "backgroundColor": "#F5F3EF"
     },
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "app.bemymuse.muse",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSContactsUsageDescription": "Muse uses your contacts to help you find friends to follow."
+      }
     },
     "android": {
+      "package": "app.bemymuse.muse",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -23,9 +28,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "permissions": [
-        "android.permission.RECORD_AUDIO"
-      ]
+      "permissions": []
     },
     "web": {
       "bundler": "metro",

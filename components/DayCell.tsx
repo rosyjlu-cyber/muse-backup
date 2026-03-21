@@ -1,4 +1,5 @@
-import { StyleSheet, TouchableOpacity, View, Text, Image, Dimensions } from 'react-native';
+import { Image } from 'expo-image';
+import { StyleSheet, TouchableOpacity, View, Text, Dimensions } from 'react-native';
 import { Theme } from '@/constants/Theme';
 
 const SCREEN_WIDTH = Math.min(Dimensions.get('window').width, 390);
@@ -38,8 +39,12 @@ export function DayCell({
       <TouchableOpacity style={styles.cell} onPress={onPress} activeOpacity={0.82}>
         <Image
           source={{ uri: photoUri }}
+            cachePolicy="disk"
           style={styles.photoImage}
-          resizeMode="cover"
+          contentFit="cover"
+          cachePolicy="disk"
+          transition={150}
+          placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }}
         />
       </TouchableOpacity>
     );

@@ -1,14 +1,21 @@
-import { useCallback, useState, useRef } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
+import { Image } from 'expo-image';
 import {
   View,
   Text,
   ScrollView,
+  Animated,
   StyleSheet,
   TouchableOpacity,
-  Image,
   Dimensions,
   StatusBar,
+  Modal,
+  TextInput,
+  Share,
+  Linking,
+  FlatList,
 } from 'react-native';
+import * as Contacts from 'expo-contacts';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -16,7 +23,7 @@ import { Feather } from '@expo/vector-icons';
 import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
 
 import { Theme } from '@/constants/Theme';
-import { getMyPosts, getNotificationsBadgeCount, Post, createWardrobeItem, addWardrobeItemPhoto } from '@/utils/api';
+import { getMyPosts, getNotificationsBadgeCount, getPostWardrobeItems, createReferral, Post, WardrobeItem, createWardrobeItem, addWardrobeItemPhoto } from '@/utils/api';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/utils/auth';
 import {
@@ -35,8 +42,6 @@ const BLOB_W = Math.round(SCREEN_WIDTH * 0.84); // natural blob width
 const BLOB_ASPECT = 477 / 277;                   // viewBox height/width ratio
 
 const PHOTO_R = 20;
-const PHOTO_TOP_GAP = 8;   // gap between header and photo top
-const PHOTO_BOT_GAP = 14;  // gap between photo bottom and panel
 
 // When no post yet, only show handle bar + streak row (no calendar header)
 const STREAK_PEEK = 96;
@@ -81,12 +86,68 @@ export default function JournalHome() {
   const [scrollY, setScrollY] = useState(0);
   const [activeTab, setActiveTab] = useState<'journal' | 'closet'>('journal');
   const [pendingCount, setPendingCount] = useState(0);
+  const [todayItems, setTodayItems] = useState<WardrobeItem[]>([]);
+  const [showInvite, setShowInvite] = useState(false);
+  const [contactsPermission, setContactsPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
+  const [contacts, setContacts] = useState<{ name: string; phone: string }[]>([]);
+  const [contactSearch, setContactSearch] = useState('');
+  const [invitedPhones, setInvitedPhones] = useState<Set<string>>(new Set());
+
+  // Check if contacts were already granted (e.g. during onboarding)
+  useEffect(() => {
+    Contacts.getPermissionsAsync().then(({ status }) => {
+      if (status === 'granted') {
+        setContactsPermission('granted');
+        Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] }).then(({ data }) => {
+          const parsed = data
+            .filter(c => c.phoneNumbers && c.phoneNumbers.length > 0 && c.name)
+            .map(c => ({ name: c.name!, phone: c.phoneNumbers![0].number! }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+          setContacts(parsed);
+        });
+      }
+    }).catch(() => {});
+  }, []);
+
+  const handleRequestContacts = async () => {
+    const { status } = await Contacts.requestPermissionsAsync();
+    setContactsPermission(status === 'granted' ? 'granted' : 'denied');
+    if (status === 'granted') {
+      const { data } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+      });
+      const parsed = data
+        .filter(c => c.phoneNumbers && c.phoneNumbers.length > 0 && c.name)
+        .map(c => ({ name: c.name!, phone: c.phoneNumbers![0].number! }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setContacts(parsed);
+    }
+  };
+
+  const handleInviteContact = (phone: string, name: string) => {
+    const msg = `hey ${name.split(' ')[0].toLowerCase()}! i've been using muse to log my daily outfits — you should join 💌 https://bemymuse.app`;
+    Linking.openURL(`sms:${phone}&body=${encodeURIComponent(msg)}`);
+    setInvitedPhones(prev => new Set(prev).add(phone));
+    createReferral(phone).catch(() => {});
+  };
+
+  const handleShareInvite = () => {
+    Share.share({ message: "be my muse 💌 https://bemymuse.app" });
+  };
 
   useFocusEffect(
     useCallback(() => {
       if (session) {
         getMyPosts().then(all => {
-          setPosts([...all].sort((a, b) => b.date.localeCompare(a.date)));
+          const sorted = [...all].sort((a, b) => b.date.localeCompare(a.date));
+          setPosts(sorted);
+          // Fetch wardrobe items for today's post
+          const today = sorted.find(p => p.date === todayString());
+          if (today) {
+            getPostWardrobeItems(today.id).then(setTodayItems).catch(() => {});
+          } else {
+            setTodayItems([]);
+          }
         });
         getNotificationsBadgeCount().then(({ followRequests, unread }) => setPendingCount(followRequests + unread)).catch(() => {});
       }
@@ -145,21 +206,8 @@ export default function JournalHome() {
 
   const insets = useSafeAreaInsets();
   const headerH = insets.top + 72;
-  // Photo: 3:4 portrait ratio, width-first. 78% screen width, height derived from that.
-  // Capped so panel always shows at least the streak row on short devices.
-  const photoW_target = Math.round(SCREEN_WIDTH * 0.78);
-  const photoH_target = Math.round(photoW_target * 4 / 3);
-  const photoH_max = containerH > 0
-    ? containerH - headerH - PHOTO_TOP_GAP - 190 - PHOTO_BOT_GAP
-    : photoH_target;
-  const photoH = (todayPost != null && containerH > 0)
-    ? Math.min(photoH_target, photoH_max)
-    : photoH_target;
-  const photoW = Math.round(photoH * 3 / 4);
-  // Panel starts right below the photo.
-  const panelPeek = todayPost != null && containerH > 0
-    ? containerH - headerH - PHOTO_TOP_GAP - photoH - PHOTO_BOT_GAP
-    : STREAK_PEEK;
+  // Panel peek stays the same regardless of posted state
+  const panelPeek = STREAK_PEEK;
   const spacerH = containerH > 0 ? containerH - panelPeek : SCREEN_HEIGHT - panelPeek;
   const blobAreaH = spacerH - headerH;
   // Scale blob proportionally — never squish vertically
@@ -167,6 +215,97 @@ export default function JournalHome() {
   const maxBlobH = Math.round(blobAreaH * 0.88);
   const blobH = Math.min(naturalBlobH, maxBlobH);
   const blobW = blobH < naturalBlobH ? Math.round(blobH / BLOB_ASPECT) : BLOB_W;
+  // Photo: 3:4 portrait, sized to fit inside the blob with blue peeking out
+  const photoW = Math.round(blobW * 0.78);
+  const photoH = Math.round(photoW * 4 / 3);
+
+  // Carousel: cards same size as the photo, centered with side cards peeking
+  const screenW = Dimensions.get('window').width;
+  const CARD_GAP = 33;
+  const cardW = photoW;
+  const cardH = photoH;
+  const snapInterval = cardW + CARD_GAP;
+  const carouselScrollX = useRef(new Animated.Value(0)).current;
+
+  // Build the logical card list: [invite, main, ...wardrobe items]
+  type CardEntry = { key: string; type: 'invite' | 'main' | 'item'; item?: WardrobeItem };
+  const baseCards: CardEntry[] = [];
+  if (todayPost) {
+    baseCards.push({ key: 'invite', type: 'invite' });
+  }
+  baseCards.push({ key: 'main', type: 'main' });
+  if (todayPost) {
+    todayItems.forEach(item => baseCards.push({ key: `item-${item.id}`, type: 'item', item }));
+  }
+  const cardCount = baseCards.length;
+
+  // For 3+ cards, create infinite wheel: repeat 3x, start in the middle copy
+  const needsWheel = cardCount >= 3;
+  const wheelCards = needsWheel
+    ? [...baseCards.map((c, i) => ({ ...c, key: `pre-${c.key}`, idx: i })),
+       ...baseCards.map((c, i) => ({ ...c, key: `mid-${c.key}`, idx: i + cardCount })),
+       ...baseCards.map((c, i) => ({ ...c, key: `post-${c.key}`, idx: i + cardCount * 2 }))]
+    : baseCards.map((c, i) => ({ ...c, idx: i }));
+
+  // Main card is index 1 in baseCards (or 0 if no invite), in the middle copy
+  const mainBaseIndex = todayPost ? 1 : 0;
+  const mainWheelIndex = needsWheel ? cardCount + mainBaseIndex : mainBaseIndex;
+  const initialScrollX = mainWheelIndex * snapInterval;
+
+  const carouselRef = useRef<any>(null);
+  const touchCarouselRef = useRef<any>(null);
+
+  // Scroll both carousels to center card on mount/post change
+  useEffect(() => {
+    const t = setTimeout(() => {
+      carouselRef.current?.scrollTo({ x: initialScrollX, animated: false });
+      touchCarouselRef.current?.scrollTo({ x: initialScrollX, animated: false });
+      carouselScrollX.setValue(initialScrollX);
+    }, 50);
+    return () => clearTimeout(t);
+  }, [todayPost?.id, todayItems.length]);
+  const isAdjusting = useRef(false);
+
+  // Sync visual carousel when touch overlay scrolls
+  const onTouchCarouselScroll = (e: any) => {
+    const x = e.nativeEvent.contentOffset.x;
+    carouselRef.current?.scrollTo({ x, animated: false });
+  };
+
+  // When user scrolls past first or third copy, silently jump to middle copy
+  const onCarouselScrollEnd = (e: any) => {
+    if (!needsWheel || isAdjusting.current) return;
+    const x = e.nativeEvent.contentOffset.x;
+    const page = Math.round(x / snapInterval);
+    if (page < cardCount || page >= cardCount * 2) {
+      isAdjusting.current = true;
+      const targetPage = cardCount + (page % cardCount);
+      const targetX = targetPage * snapInterval;
+      touchCarouselRef.current?.scrollTo({ x: targetX, animated: false });
+      carouselRef.current?.scrollTo({ x: targetX, animated: false });
+      carouselScrollX.setValue(targetX);
+      setTimeout(() => { isAdjusting.current = false; }, 50);
+    }
+  };
+
+  const getCardAnimStyle = (wheelIndex: number) => {
+    const inputRange = [
+      (wheelIndex - 1) * snapInterval,
+      wheelIndex * snapInterval,
+      (wheelIndex + 1) * snapInterval,
+    ];
+    const scale = carouselScrollX.interpolate({
+      inputRange,
+      outputRange: [0.85, 1, 0.85],
+      extrapolate: 'clamp',
+    });
+    const opacity = carouselScrollX.interpolate({
+      inputRange,
+      outputRange: [0.5, 1, 0.5],
+      extrapolate: 'clamp',
+    });
+    return { transform: [{ scale }], opacity };
+  };
 
   const initials = (profile?.display_name ?? profile?.username ?? '?')[0].toUpperCase();
 
@@ -177,60 +316,134 @@ export default function JournalHome() {
     >
       <StatusBar barStyle="dark-content" backgroundColor={Theme.colors.background} />
 
-      {/* Hero background — visual only, no interactions */}
+      {/* Hero background — blob mirror, behind everything */}
       <View style={[styles.heroLayer, { height: spacerH }]} pointerEvents="none">
         <View style={{ height: headerH }} />
-        <View style={[styles.blobWrapper, !!todayPost && styles.blobWrapperPosted]}>
-          {!session ? (
-            <BlobMirror width={blobW} height={blobH}>
-              <Text style={styles.blobTitle}>{'SIGN IN\nTO START'}</Text>
-            </BlobMirror>
-          ) : !todayPost ? (
-            <BlobMirror width={blobW} height={blobH}>
-              <View style={styles.cameraRing}>
-                <Feather name="camera" size={28} color="#0B0B0B" />
-              </View>
-              <Text style={styles.blobTitle}>{'ADD\nTODAY\'S\nLOOK'}</Text>
-            </BlobMirror>
-          ) : (
-            <View style={[styles.photoTouchable, { width: photoW, height: photoH }]}>
-              <Image
-                source={{ uri: todayPost.photo_url }}
-                style={[styles.photoImage, { width: photoW, height: photoH }]}
-                resizeMode="cover"
-              />
-              <LinearGradient
-                colors={['transparent', 'rgba(11,11,11,0.82)']}
-                style={styles.photoOverlay}
-              >
-                <Text style={styles.photoDate}>{formatDate(todayStr)}</Text>
-                <View style={styles.photoLoggedRow}>
-                  <Text style={styles.photoLoggedText}>today's look</Text>
-                  <View style={styles.checkBadge}>
-                    <Feather name="check" size={11} color="#fff" />
-                  </View>
-                </View>
-                {!!todayPost.caption && (
-                  <Text style={styles.overlayCaptionText} numberOfLines={2}>
-                    {todayPost.caption}
-                  </Text>
-                )}
-                {todayPost.tags && todayPost.tags.length > 0 && (
-                  <View style={styles.overlayTagsRow}>
-                    {todayPost.tags.slice(0, 5).map((tag, i) => (
-                      <View key={i} style={styles.overlayTagChip}>
-                        <Text style={styles.overlayTagText}>{tag}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </LinearGradient>
-            </View>
-          )}
+        <View style={styles.blobFixed}>
+          <BlobMirror width={blobW} height={blobH} />
         </View>
       </View>
 
-      {/* Scroll overlay — starts below header so panel can never cover it */}
+      {/* Carousel — fixed layer, rendered before ScrollView so panel covers it.
+          Touch overlay rendered after ScrollView handles swipes/taps. */}
+      <View style={[styles.heroLayer, { height: spacerH }]} pointerEvents="none">
+        <View style={{ height: headerH }} />
+        <View style={styles.carouselWrapper}>
+          <Animated.ScrollView
+            scrollEnabled={false}
+            ref={carouselRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            snapToInterval={snapInterval}
+            decelerationRate="fast"
+            contentOffset={{ x: initialScrollX, y: 0 }}
+            contentContainerStyle={{
+              paddingHorizontal: (screenW - cardW) / 2,
+              gap: CARD_GAP,
+              alignItems: 'center',
+            }}
+            onScroll={Animated.event(
+              [{ nativeEvent: { contentOffset: { x: carouselScrollX } } }],
+              { useNativeDriver: true },
+            )}
+            onMomentumScrollEnd={onCarouselScrollEnd}
+            scrollEventThrottle={16}
+          >
+            {wheelCards.map(card => {
+              const animStyle = (todayPost || card.type !== 'main') ? getCardAnimStyle(card.idx) : undefined;
+
+              if (card.type === 'invite') {
+                return (
+                  <Animated.View key={card.key} style={[styles.carouselCard, { width: cardW, height: cardH }, animStyle]}>
+                    <LinearGradient
+                      colors={['#F9C74F', '#F77FAD'] as const}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={styles.engagementCardBg}
+                    >
+                      <Text style={styles.engagementEmoji}>💌</Text>
+                      <Text style={styles.engagementTitle}>{'invite\n5 friends'}</Text>
+                      <View style={styles.inviteDots}>
+                        {[0, 1, 2, 3, 4].map(i => (
+                          <View key={i} style={[styles.inviteDot, i < invitedPhones.size && styles.inviteDotFilled]} />
+                        ))}
+                      </View>
+                      <Text style={styles.engagementSub}>unlock features as they join</Text>
+                    </LinearGradient>
+                  </Animated.View>
+                );
+              }
+
+              if (card.type === 'main') {
+                return (
+                  <Animated.View key={card.key} style={[styles.carouselCard, { width: cardW, height: cardH }, animStyle]}>
+                    {!session ? (
+                      <View style={[StyleSheet.absoluteFill, styles.mainCardContent]}>
+                        <Text style={styles.blobTitle}>{'SIGN IN\nTO START'}</Text>
+                      </View>
+                    ) : !todayPost ? (
+                      <View style={[StyleSheet.absoluteFill, styles.mainCardContent]}>
+                        <View style={styles.cameraRing}>
+                          <Feather name="camera" size={28} color="#0B0B0B" />
+                        </View>
+                        <Text style={styles.blobTitle}>{'ADD\nTODAY\'S\nLOOK'}</Text>
+                      </View>
+                    ) : (
+                      <View style={[styles.photoTouchable, { width: cardW, height: cardH }]}>
+                        <Image
+                          source={{ uri: todayPost.photo_url }}
+                            cachePolicy="disk"
+                          style={[styles.photoImage, { width: cardW, height: cardH }]}
+                          resizeMode="cover"
+                        />
+                        <LinearGradient
+                          colors={['transparent', 'rgba(11,11,11,0.55)']}
+                          style={styles.photoOverlay}
+                        >
+                          <Text style={styles.photoDate}>{formatDate(todayStr)}</Text>
+                          <View style={styles.photoLoggedRow}>
+                            <Text style={styles.photoLoggedText}>today's look</Text>
+                            <View style={styles.checkBadge}>
+                              <Feather name="check" size={11} color="#fff" />
+                            </View>
+                          </View>
+                        </LinearGradient>
+                      </View>
+                    )}
+                  </Animated.View>
+                );
+              }
+
+              const item = card.item!;
+              return (
+                <Animated.View key={card.key} style={[styles.carouselCard, { width: cardW, height: cardH }, animStyle]}>
+                  {item.generated_image_url ? (
+                    <View style={styles.itemCardBg}>
+                      <Image
+                        source={{ uri: item.generated_image_url }}
+                          cachePolicy="disk"
+                        style={styles.itemCardImage}
+                        resizeMode="contain"
+                      />
+                      <View style={styles.itemCardFooter}>
+                        <Text style={styles.itemCardLabel} numberOfLines={1}>{item.label}</Text>
+                        {item.brand && <Text style={styles.itemCardBrand} numberOfLines={1}>{item.brand}</Text>}
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={[styles.itemCardBg, { backgroundColor: Theme.colors.surface }]}>
+                      <Text style={styles.itemCardPlaceholderEmoji}>👕</Text>
+                      <Text style={styles.itemCardLabel}>{item.label}</Text>
+                    </View>
+                  )}
+                </Animated.View>
+              );
+            })}
+          </Animated.ScrollView>
+        </View>
+      </View>
+
+      {/* Scroll overlay — panel slides over blob + carousel */}
       <ScrollView
         style={[StyleSheet.absoluteFill, { top: headerH }]}
         contentContainerStyle={styles.scrollContent}
@@ -277,9 +490,7 @@ export default function JournalHome() {
             {(['journal', 'closet'] as const).map(tab => (
               <TouchableOpacity
                 key={tab}
-                onPress={() => {
-                    setActiveTab(tab);
-                }}
+                onPress={() => { setActiveTab(tab); }}
                 style={styles.tabItem}
                 activeOpacity={0.7}
               >
@@ -321,38 +532,50 @@ export default function JournalHome() {
         </LinearGradient>
       </ScrollView>
 
-      {/* Hero interactive overlay — rendered after ScrollView so taps reach it.
-          Disabled when scrolled so the lime card content stays tappable. */}
+      {/* Carousel touch overlay — on top of ScrollView for swipe/tap, transparent */}
       <View
         style={[styles.heroLayer, { height: spacerH }]}
         pointerEvents={scrollY < 50 ? 'box-none' : 'none'}
       >
-        <View style={{ height: headerH }} />
-        <View style={[styles.blobWrapper, !!todayPost && styles.blobWrapperPosted]}>
-          {!session ? (
-            <TouchableOpacity
-              onPress={() => router.push('/auth' as any)}
-              activeOpacity={0.86}
-              style={[styles.blobTouchable, { width: blobW, height: blobH }]}
-            />
-          ) : !todayPost ? (
-            <TouchableOpacity
-              onPress={goToAdd}
-              activeOpacity={0.86}
-              style={[styles.blobTouchable, { width: blobW, height: blobH }]}
-            />
-          ) : (
-            <TouchableOpacity
-              onPress={goToTodayEntry}
-              activeOpacity={0.9}
-              style={[styles.photoTouchable, { width: photoW, height: photoH }]}
-            />
-          )}
+        <View style={{ height: headerH }} pointerEvents="none" />
+        <View style={styles.carouselWrapper}>
+          <Animated.ScrollView
+            ref={touchCarouselRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            snapToInterval={snapInterval}
+            decelerationRate="fast"
+            contentOffset={{ x: initialScrollX, y: 0 }}
+            contentContainerStyle={{
+              paddingHorizontal: (screenW - cardW) / 2,
+              gap: CARD_GAP,
+              alignItems: 'center',
+            }}
+            onScroll={Animated.event(
+              [{ nativeEvent: { contentOffset: { x: carouselScrollX } } }],
+              { useNativeDriver: true, listener: onTouchCarouselScroll },
+            )}
+            onMomentumScrollEnd={onCarouselScrollEnd}
+            scrollEventThrottle={16}
+          >
+            {wheelCards.map(card => (
+              <TouchableOpacity
+                key={card.key}
+                style={{ width: cardW, height: cardH }}
+                activeOpacity={1}
+                onPress={
+                  card.type === 'invite' ? () => setShowInvite(true)
+                  : card.type === 'main' ? (!session ? () => router.push('/auth' as any) : !todayPost ? goToAdd : goToTodayEntry)
+                  : () => router.push({ pathname: '/wardrobe/[id]' as any, params: { id: card.item!.id } })
+                }
+              />
+            ))}
+          </Animated.ScrollView>
         </View>
       </View>
 
       {/* Header rendered last = above scroll, touches reach it */}
-      <View style={[styles.header, { paddingTop: insets.top + 10 }]} pointerEvents="box-none">
+      <View style={[styles.header, { paddingTop: insets.top + 4 }]} pointerEvents="box-none">
         <Text style={styles.wordmark}>muse</Text>
         <View style={styles.headerRight}>
           {session && (
@@ -384,15 +607,110 @@ export default function JournalHome() {
             activeOpacity={0.8}
           >
             {profile?.avatar_url ? (
-              <Image source={{ uri: profile.avatar_url }} style={styles.avatarImg} />
-            ) : (
+              <Image source={{ uri: profile.avatar_url }} style={styles.avatarImg} cachePolicy="disk" />
+            ) : profile ? (
               <View style={styles.avatarPlaceholder}>
                 <Text style={styles.avatarInitials}>{initials}</Text>
               </View>
+            ) : (
+              <View style={styles.avatarPlaceholder} />
             )}
           </TouchableOpacity>
         </View>
       </View>
+      {/* Invite friends modal */}
+      <Modal visible={showInvite} animationType="slide" transparent>
+        <View style={styles.inviteOverlay}>
+          <View style={styles.inviteSheet}>
+            <View style={styles.inviteHeader}>
+              <View style={{ width: 40 }} />
+              <Text style={styles.inviteTitle}>invite friends</Text>
+              <TouchableOpacity onPress={() => setShowInvite(false)} hitSlop={12} style={{ width: 40, alignItems: 'flex-end' }}>
+                <Text style={styles.inviteDone}>done</Text>
+              </TouchableOpacity>
+            </View>
+
+            {contactsPermission !== 'granted' ? (
+              <View style={styles.inviteEmptyState}>
+                <Text style={{ fontSize: 36 }}>📱</Text>
+                <Text style={styles.inviteEmptyTitle}>connect with your people</Text>
+                <Text style={styles.inviteEmptyBody}>see who's already here and invite the rest</Text>
+                <TouchableOpacity style={styles.inviteSyncBtn} onPress={handleRequestContacts} activeOpacity={0.8}>
+                  <LinearGradient
+                    colors={['#F9C74F', '#F77FAD']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.inviteSyncGradient}
+                  >
+                    <Text style={styles.inviteSyncText}>sync contacts</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleShareInvite} style={styles.inviteShareLink}>
+                  <Text style={styles.inviteShareLinkText}>or share invite link</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                <View style={styles.inviteSearchRow}>
+                  <Feather name="search" size={16} color={Theme.colors.secondary} />
+                  <TextInput
+                    style={styles.inviteSearchInput}
+                    placeholder="search contacts"
+                    placeholderTextColor={Theme.colors.secondary}
+                    value={contactSearch}
+                    onChangeText={setContactSearch}
+                  />
+                </View>
+                <FlatList
+                  data={contacts.filter(c =>
+                    !contactSearch.trim() || c.name.toLowerCase().includes(contactSearch.toLowerCase())
+                  )}
+                  keyExtractor={(item, i) => `${item.phone}-${i}`}
+                  renderItem={({ item }) => {
+                    const invited = invitedPhones.has(item.phone);
+                    return (
+                      <View style={styles.inviteContactRow}>
+                        <View style={styles.inviteContactAvatar}>
+                          <Text style={styles.inviteContactInitial}>{item.name[0].toUpperCase()}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.inviteContactName}>{item.name}</Text>
+                          <Text style={styles.inviteContactPhone}>{item.phone}</Text>
+                        </View>
+                        <TouchableOpacity
+                          style={[styles.inviteBtn, invited && styles.inviteBtnSent]}
+                          onPress={() => handleInviteContact(item.phone, item.name)}
+                          activeOpacity={0.8}
+                          disabled={invited}
+                        >
+                          <Text style={[styles.inviteBtnText, invited && styles.inviteBtnTextSent]}>
+                            {invited ? 'sent' : 'invite'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  }}
+                  ListEmptyComponent={
+                    <Text style={styles.inviteEmptyBody}>no contacts found</Text>
+                  }
+                  contentContainerStyle={{ paddingBottom: 32 }}
+                />
+                <TouchableOpacity onPress={handleShareInvite} activeOpacity={0.8} style={{ borderRadius: 100, overflow: 'hidden', marginHorizontal: 20, marginBottom: 8 }}>
+                  <LinearGradient
+                    colors={['#F9C74F', '#F77FAD']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.inviteShareBar}
+                  >
+                    <Feather name="link" size={14} color="#fff" />
+                    <Text style={styles.inviteShareBarText}>share invite link</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -432,10 +750,54 @@ const styles = StyleSheet.create({
   },
   avatarInitials: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.primary },
 
-  blobWrapper: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  blobWrapperPosted: { justifyContent: 'flex-start', paddingTop: PHOTO_TOP_GAP },
-  blobTouchable: { width: BLOB_W },
-  blobContent: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14 },
+  blobFixed: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  carouselWrapper: { flex: 1, justifyContent: 'center' },
+  mainCardContent: { alignItems: 'center', justifyContent: 'center', gap: 14 },
+  carouselCard: { borderRadius: 28, overflow: 'hidden' },
+  postedHero: { alignItems: 'center', justifyContent: 'center' },
+  engagementCardBg: {
+    flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10,
+    borderRadius: 28, paddingHorizontal: 32,
+    borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.06)',
+  },
+  engagementEmoji: { fontSize: 36 },
+  engagementTitle: {
+    fontFamily: 'Caprasimo_400Regular', fontSize: 20,
+    color: '#0B0B0B', textAlign: 'center', letterSpacing: -0.3, lineHeight: 26,
+  },
+  inviteDots: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  inviteDot: {
+    width: 10, height: 10, borderRadius: 5,
+    backgroundColor: 'rgba(0,0,0,0.12)', borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.18)',
+  },
+  inviteDotFilled: { backgroundColor: Theme.colors.brandWarm, borderColor: Theme.colors.brandWarm },
+  engagementSub: {
+    fontSize: Theme.font.sm, color: 'rgba(11,11,11,0.5)',
+    textAlign: 'center', fontWeight: '500', marginTop: 2,
+  },
+  itemCardBg: {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#fff', borderRadius: 28,
+    borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.08)',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08, shadowRadius: 8, elevation: 3,
+  },
+  itemCardImage: {
+    width: '75%', height: '65%',
+  },
+  itemCardFooter: {
+    position: 'absolute', bottom: 20, left: 16, right: 16,
+    alignItems: 'center',
+  },
+  itemCardLabel: {
+    fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.primary,
+    textAlign: 'center',
+  },
+  itemCardBrand: {
+    fontSize: Theme.font.xs, color: Theme.colors.secondary,
+    marginTop: 2, textTransform: 'lowercase',
+  },
+  itemCardPlaceholderEmoji: { fontSize: 44, marginBottom: 10 },
   cameraRing: {
     width: 64, height: 64, borderRadius: 32,
     backgroundColor: 'rgba(11,11,11,0.12)',
@@ -513,15 +875,72 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.colors.brandWarm,
     alignItems: 'center', justifyContent: 'center',
   },
-  overlayCaptionText: {
-    fontSize: Theme.font.sm, color: 'rgba(255,255,255,0.82)',
-    fontStyle: 'italic', marginTop: 8, lineHeight: 18,
+
+  // Invite modal
+  inviteOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'flex-end',
   },
-  overlayTagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 8 },
-  overlayTagChip: {
-    paddingHorizontal: 9, paddingVertical: 3, borderRadius: 100,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)',
-    backgroundColor: 'rgba(255,255,255,0.12)',
+  inviteSheet: {
+    backgroundColor: Theme.colors.background,
+    borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    maxHeight: '85%', paddingBottom: 32,
   },
-  overlayTagText: { fontSize: 10, color: 'rgba(255,255,255,0.88)', fontWeight: '500' },
+  inviteHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingTop: 20, paddingBottom: 12,
+  },
+  inviteTitle: {
+    fontFamily: 'Caprasimo_400Regular', fontSize: 20,
+    color: Theme.colors.primary,
+  },
+  inviteDone: { fontSize: Theme.font.base, fontWeight: '600', color: Theme.colors.accent },
+  inviteEmptyState: {
+    alignItems: 'center', paddingHorizontal: 32, paddingVertical: 40, gap: 10,
+  },
+  inviteEmptyTitle: {
+    fontSize: Theme.font.md, fontWeight: '700', color: Theme.colors.primary,
+    textAlign: 'center',
+  },
+  inviteEmptyBody: {
+    fontSize: Theme.font.sm, color: Theme.colors.secondary,
+    textAlign: 'center', lineHeight: 20,
+  },
+  inviteSyncBtn: { marginTop: 12, borderRadius: 100, overflow: 'hidden' },
+  inviteSyncGradient: { paddingHorizontal: 28, paddingVertical: 12, borderRadius: 100 },
+  inviteSyncText: { fontSize: Theme.font.sm, fontWeight: '700', color: '#fff' },
+  inviteShareLink: { marginTop: 8 },
+  inviteShareLinkText: { fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.accent },
+  inviteSearchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 20, marginBottom: 8,
+    backgroundColor: Theme.colors.surface,
+    borderRadius: Theme.radius.md,
+    paddingHorizontal: 12, paddingVertical: 8,
+  },
+  inviteSearchInput: { flex: 1, fontSize: Theme.font.sm, color: Theme.colors.primary, padding: 0 },
+  inviteContactRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 20, paddingVertical: 10,
+  },
+  inviteContactAvatar: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: Theme.colors.surface,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  inviteContactInitial: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.primary },
+  inviteContactName: { fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.primary },
+  inviteContactPhone: { fontSize: Theme.font.xs, color: Theme.colors.secondary, marginTop: 1 },
+  inviteBtn: {
+    backgroundColor: Theme.colors.brandWarm,
+    paddingHorizontal: 16, paddingVertical: 6, borderRadius: 100,
+  },
+  inviteBtnText: { fontSize: Theme.font.xs, fontWeight: '700', color: '#fff' },
+  inviteBtnSent: { backgroundColor: Theme.colors.surface },
+  inviteBtnTextSent: { color: Theme.colors.secondary },
+  inviteShareBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 12, borderRadius: 100,
+  },
+  inviteShareBarText: { fontSize: Theme.font.sm, fontWeight: '700', color: '#fff' },
 });

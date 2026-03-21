@@ -16,13 +16,14 @@ interface FeedFiltersProps {
   onChange: (f: FeedFilters) => void;
   communities: Community[];
   availableTags: string[];
+  onCommunityLongPress?: (communityId: string) => void;
 }
 
-export function FeedFiltersBar({ filters, onChange, communities, availableTags }: FeedFiltersProps) {
+export function FeedFiltersBar({ filters, onChange, communities, availableTags, onCommunityLongPress }: FeedFiltersProps) {
   const set = (patch: Partial<FeedFilters>) => onChange({ ...filters, ...patch });
 
   const toggleCommunity = (id: string) =>
-    set({ communityId: filters.communityId === id ? undefined : id });
+    set({ communityId: filters.communityId === id ? undefined : id, explore: undefined });
 
   const toggleTag = (tag: string) =>
     set({ tag: filters.tag === tag ? undefined : tag });
@@ -51,13 +52,24 @@ export function FeedFiltersBar({ filters, onChange, communities, availableTags }
           label={c.name}
           active={filters.communityId === c.id}
           onPress={() => toggleCommunity(c.id)}
+          onLongPress={onCommunityLongPress ? () => onCommunityLongPress(c.id) : undefined}
+          variant="community"
         />
       ))}
 
-      {availableTags.length > 0 && <Divider />}
+      <Divider />
+
+      {/* Explore pill */}
+      <Pill
+        label="explore"
+        active={!!filters.explore}
+        onPress={() => set({ explore: filters.explore ? undefined : true, communityId: undefined })}
+        variant="explore"
+      />
 
       {/* Tag pills */}
-      {availableTags.slice(0, 12).map(tag => (
+      {availableTags.length > 0 && <Divider />}
+      {availableTags.map(tag => (
         <Pill
           key={tag}
           label={tag}
@@ -66,6 +78,7 @@ export function FeedFiltersBar({ filters, onChange, communities, availableTags }
           variant="tag"
         />
       ))}
+
     </ScrollView>
   );
 }
@@ -110,7 +123,7 @@ function DatePickerPill({ date, dateRange, onDateChange, onDateRangeChange }: {
         <Feather
           name="calendar"
           size={11}
-          color={hasFilter ? '#fff' : 'rgba(0,0,0,0.45)'}
+          color={hasFilter ? '#9B4DA8' : 'rgba(0,0,0,0.45)'}
           style={{ marginRight: 4 }}
         />
         <Text style={[styles.pillText, hasFilter && styles.pillTextActive]}>
@@ -277,16 +290,27 @@ function DatePickerModal({ visible, selected, dateRange, onSelect, onRangeSelect
 
 // ─── Shared sub-components ────────────────────────────────────────────────────
 
-function Pill({ label, active, onPress, variant = 'default' }: { label: string; active: boolean; onPress: () => void; variant?: 'tag' | 'default' }) {
-  const activeStyle = variant === 'tag' ? styles.pillActiveTag : styles.pillActiveRed;
-  const activeTextStyle = variant === 'tag' ? styles.pillTextActiveTag : styles.pillTextActive;
+const PILL_MAX_CHARS = 14;
+
+function Pill({ label, active, onPress, onLongPress, variant = 'default' }: { label: string; active: boolean; onPress: () => void; onLongPress?: () => void; variant?: 'tag' | 'default' | 'explore' | 'community' }) {
+  const variantStyles: Record<string, { bg: any; text: any }> = {
+    default: { bg: styles.pillActiveRed, text: styles.pillTextActive },
+    tag: { bg: styles.pillActiveTag, text: styles.pillTextActiveTag },
+    explore: { bg: styles.pillActiveExplore, text: styles.pillTextActiveExplore },
+    community: { bg: styles.pillActiveCommunity, text: styles.pillTextActiveCommunity },
+  };
+  const { bg: activeStyle, text: activeTextStyle } = variantStyles[variant] ?? variantStyles.default;
+  const displayLabel = active || label.length <= PILL_MAX_CHARS
+    ? label
+    : label.slice(0, PILL_MAX_CHARS).trimEnd() + '…';
   return (
     <TouchableOpacity
       style={[styles.pill, active && activeStyle]}
       onPress={onPress}
+      onLongPress={onLongPress}
       activeOpacity={0.75}
     >
-      <Text style={[styles.pillText, active && activeTextStyle]}>{label}</Text>
+      <Text style={[styles.pillText, active && activeTextStyle]}>{displayLabel}</Text>
     </TouchableOpacity>
   );
 }
@@ -318,8 +342,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(0,0,0,0.18)',
   },
   pillActiveRed: {
-    backgroundColor: Theme.colors.brandWarm,
-    borderColor: Theme.colors.brandWarm,
+    backgroundColor: 'rgba(233,179,238,0.20)',
+    borderColor: '#e9b3ee',
   },
   pillActiveTag: {
     backgroundColor: 'rgba(58,135,181,0.10)',
@@ -331,8 +355,18 @@ const styles = StyleSheet.create({
     color: 'rgba(0,0,0,0.55)',
     letterSpacing: 0.2,
   },
-  pillTextActive: { color: '#fff' },
+  pillTextActive: { color: '#9B4DA8' },
   pillTextActiveTag: { color: Theme.colors.accent },
+  pillActiveExplore: {
+    backgroundColor: 'rgba(249,199,79,0.20)',
+    borderColor: '#F9C74F',
+  },
+  pillTextActiveExplore: { color: '#9B6B00' },
+  pillActiveCommunity: {
+    backgroundColor: 'rgba(247,127,173,0.15)',
+    borderColor: '#F77FAD',
+  },
+  pillTextActiveCommunity: { color: '#D4578A' },
 
   divider: {
     width: 1,

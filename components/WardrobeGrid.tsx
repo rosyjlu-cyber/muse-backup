@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Image } from 'expo-image';
 import {
-  View, Text, Image, TextInput, TouchableOpacity,
+  View, Text, TextInput, TouchableOpacity,
   StyleSheet, ActivityIndicator, Dimensions, ScrollView,
   Modal, FlatList, Alert, Animated, PanResponder,
 } from 'react-native';
@@ -587,8 +588,13 @@ export function WardrobeGrid({ userId, onItemPress, onLogOutfit, readOnly = fals
                         <View style={[styles.cellImage, styles.cellImageWhiteBg, !isUserPhoto && styles.cellImagePad, { width: cellSize, height: cellSize }]}>
                           <Image
                             source={{ uri: imageUrl }}
+                              cachePolicy="disk"
                             style={styles.cellImageFill}
-                            resizeMode="contain"
+                            contentFit="contain"
+                            cachePolicy="disk"
+                            recyclingKey={item.id}
+                            transition={200}
+                            placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }}
                           />
                         </View>
                       ) : (
@@ -693,7 +699,7 @@ export function WardrobeGrid({ userId, onItemPress, onLogOutfit, readOnly = fals
                   return (
                     <View key={wi.id} style={styles.mergeCompareCol}>
                       {imgUrl ? (
-                        <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" />
+                        <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" cachePolicy="disk" />
                       ) : (
                         <View style={[styles.mergeCompareImg, styles.mergePlaceholder]}>
                           <Text style={{ fontSize: 36 }}>{categoryEmoji(wi.category)}</Text>
@@ -744,7 +750,7 @@ export function WardrobeGrid({ userId, onItemPress, onLogOutfit, readOnly = fals
                       activeOpacity={0.85}
                     >
                       {imgUrl ? (
-                        <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" />
+                        <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" cachePolicy="disk" />
                       ) : (
                         <View style={[styles.mergeCompareImg, styles.mergePlaceholder]}>
                           <Text style={{ fontSize: 36 }}>{categoryEmoji(wi.category)}</Text>
@@ -820,7 +826,7 @@ export function WardrobeGrid({ userId, onItemPress, onLogOutfit, readOnly = fals
                     activeOpacity={0.8}
                   >
                     {imgUrl ? (
-                      <Image source={{ uri: imgUrl }} style={styles.mergeCellImage} resizeMode="contain" />
+                      <Image source={{ uri: imgUrl }} style={styles.mergeCellImage} resizeMode="contain" cachePolicy="disk" />
                     ) : (
                       <View style={[styles.mergeCellImage, styles.mergePlaceholder]}>
                         <Text style={{ fontSize: 28 }}>{categoryEmoji(mi.category)}</Text>
@@ -857,7 +863,7 @@ export function WardrobeGrid({ userId, onItemPress, onLogOutfit, readOnly = fals
                       activeOpacity={0.85}
                     >
                       {imgUrl ? (
-                        <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" />
+                        <Image source={{ uri: imgUrl }} style={styles.mergeCompareImg} resizeMode="contain" cachePolicy="disk" />
                       ) : (
                         <View style={[styles.mergeCompareImg, styles.mergePlaceholder]}>
                           <Text style={{ fontSize: 36 }}>{categoryEmoji(wi.category)}</Text>
@@ -1071,7 +1077,7 @@ const styles = StyleSheet.create({
   mergeConfirmBtn: {
     borderRadius: Theme.radius.md, paddingVertical: 16, alignItems: 'center',
   },
-  mergeConfirmBtnText: { fontSize: Theme.font.base, fontWeight: '700', color: '#7C3060' },
+  mergeConfirmBtnText: { fontSize: Theme.font.base, fontWeight: '700', color: Theme.colors.primary },
 
   // Suggestion banner
   suggestionBanner: {

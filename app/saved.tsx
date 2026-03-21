@@ -1,11 +1,11 @@
 import { useCallback, useState } from 'react';
+import { Image } from 'expo-image';
 import {
-  View, Text, Image, TouchableOpacity,
+  View, Text, TouchableOpacity,
   StyleSheet, FlatList, ScrollView, ActivityIndicator, Dimensions,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather } from '@expo/vector-icons';
 
 import { Theme } from '@/constants/Theme';
 import {
@@ -129,13 +129,12 @@ export default function SavedScreen() {
               onUserPress={(uid) => router.push({ pathname: '/profile/[userId]' as any, params: { userId: uid } })}
             />
           )}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, { flexGrow: 1 }]}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={styles.center}>
-              <Feather name="bookmark" size={36} color={Theme.colors.border} style={{ marginBottom: 12 }} />
               <Text style={styles.emptyText}>no saved looks yet</Text>
-              <Text style={styles.emptySubText}>bookmark outfits from the feed to find them here</Text>
+              <Text style={styles.emptySubText}>start collecting looks you love</Text>
             </View>
           }
         />
@@ -143,9 +142,8 @@ export default function SavedScreen() {
         <ScrollView contentContainerStyle={styles.itemScrollContent} showsVerticalScrollIndicator={false}>
           {items.length === 0 ? (
             <View style={styles.center}>
-              <Feather name="bookmark" size={36} color={Theme.colors.border} style={{ marginBottom: 12 }} />
               <Text style={styles.emptyText}>no saved items yet</Text>
-              <Text style={styles.emptySubText}>bookmark wardrobe items from other people's clothings to find them here</Text>
+              <Text style={styles.emptySubText}>start collecting pieces that catch your eye</Text>
             </View>
           ) : (
             <View style={styles.itemGrid}>
@@ -162,7 +160,7 @@ export default function SavedScreen() {
                       >
                         {imageUrl ? (
                           <View style={styles.itemCellImg}>
-                            <Image source={{ uri: imageUrl }} style={styles.itemCellImgFill} resizeMode="contain" />
+                            <Image source={{ uri: imageUrl }} style={styles.itemCellImgFill} resizeMode="contain" cachePolicy="disk" />
                           </View>
                         ) : (
                           <View style={[styles.itemCellImg, styles.itemCellPlaceholder]}>

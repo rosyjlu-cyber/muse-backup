@@ -1,11 +1,13 @@
 import { useCallback, useRef, useState } from 'react';
+import { Image } from 'expo-image';
 import {
   View,
   Text,
-  Image,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
+  Animated,
+  Modal,
   ActivityIndicator,
   StatusBar,
 } from 'react-native';
@@ -28,6 +30,8 @@ import {
   savePost,
   unsavePost,
   addComment,
+  getFollowers,
+  getFollowing,
   Profile,
   Post,
 } from '@/utils/api';
@@ -50,14 +54,56 @@ export default function UserProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [communityCount, setCommunityCount] = useState(0);
   const [activeTab, setActiveTab] = useState<'journal' | 'closet'>('journal');
+  const [statsOpen, setStatsOpen] = useState(false);
+
+  const [popupType, setPopupType] = useState<'followers' | 'following' | null>(null);
+  const [popupProfiles, setPopupProfiles] = useState<Profile[]>([]);
+  const [popupLoading, setPopupLoading] = useState(false);
+
+  const openPopup = async (type: 'followers' | 'following') => {
+    if (!canSeeContent) return;
+    setPopupType(type);
+    setPopupLoading(true);
+    try {
+      if (type === 'followers') setPopupProfiles(await getFollowers(userId));
+      else setPopupProfiles(await getFollowing(userId));
+    } catch {}
+    finally { setPopupLoading(false); }
+  };
 
   const pendingLikes = useRef(new Set<string>());
+  const hasLoaded = useRef(false);
+  const scrollY = useRef(new Animated.Value(0)).current;
+
+  const SCROLL_THRESHOLD = 60;
+  const titleFontSize = scrollY.interpolate({
+    inputRange: [0, SCROLL_THRESHOLD],
+    outputRange: [28, 20],
+    extrapolate: 'clamp',
+  });
+  const usernameFontSize = scrollY.interpolate({
+    inputRange: [0, SCROLL_THRESHOLD],
+    outputRange: [14, 10],
+    extrapolate: 'clamp',
+  });
+  const headerCenterMarginTop = scrollY.interpolate({
+    inputRange: [0, SCROLL_THRESHOLD],
+    outputRange: [28, 0],
+    extrapolate: 'clamp',
+  });
+  const headerPaddingBottom = scrollY.interpolate({
+    inputRange: [0, SCROLL_THRESHOLD],
+    outputRange: [10, 4],
+    extrapolate: 'clamp',
+  });
 
   const canSeeContent = !!profile?.is_public || followStatus === 'following' || isOwnProfile;
 
   useFocusEffect(
     useCallback(() => {
       if (!userId) return;
+      if (hasLoaded.current) return;
+      hasLoaded.current = true;
       setLoading(true);
       Promise.all([
         getProfile(userId),
@@ -137,10 +183,9 @@ export default function UserProfileScreen() {
       <SafeAreaView style={styles.safe}>
         <StatusBar barStyle="light-content" backgroundColor={Theme.colors.background} />
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.headerLeft}>
             <Text style={styles.backText}>‹ back</Text>
           </TouchableOpacity>
-          <View style={styles.headerSpacer} />
         </View>
         <View style={styles.centered}>
           <ActivityIndicator color={Theme.colors.brandWarm} />
@@ -154,10 +199,9 @@ export default function UserProfileScreen() {
       <SafeAreaView style={styles.safe}>
         <StatusBar barStyle="light-content" backgroundColor={Theme.colors.background} />
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.headerLeft}>
             <Text style={styles.backText}>‹ back</Text>
           </TouchableOpacity>
-          <View style={styles.headerSpacer} />
         </View>
         <View style={styles.centered}>
           <Text style={styles.notFoundText}>user not found</Text>
@@ -174,100 +218,116 @@ export default function UserProfileScreen() {
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor={Theme.colors.background} />
 
-      {/* Header — back only, no duplicate name */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
+      {/* Header */}
+      <Animated.View style={[styles.header, { paddingBottom: headerPaddingBottom }]}>
+        <Animated.View style={[styles.headerCenter, { marginTop: headerCenterMarginTop }]}>
+          <Animated.Text style={[styles.headerTitle, { fontSize: titleFontSize }]}>{displayName}</Animated.Text>
+          <Animated.Text style={[styles.headerUsername, { fontSize: usernameFontSize }]}>@{profile.username}</Animated.Text>
+        </Animated.View>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.headerLeft}>
           <Text style={styles.backText}>‹ back</Text>
         </TouchableOpacity>
-        <View style={styles.headerSpacer} />
-      </View>
+        {!isOwnProfile && session ? (
+          <TouchableOpacity onPress={handleFollowToggle} activeOpacity={0.85} hitSlop={8} style={styles.headerRight}>
+            {followStatus === 'none' ? (
+              <LinearGradient
+                colors={['#F9C74F', '#F77FAD']}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                style={styles.headerFollowBtn}
+              >
+                <Text style={styles.headerFollowText}>follow</Text>
+              </LinearGradient>
+            ) : (
+              <View style={[styles.headerFollowBtn, styles.headerFollowBtnMuted]}>
+                <Text style={styles.headerFollowTextMuted}>
+                  {followStatus === 'following' ? 'following' : 'requested'}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        ) : null}
+      </Animated.View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <Animated.ScrollView
+        showsVerticalScrollIndicator={false}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        scrollEventThrottle={16}
+      >
         {/* ── Profile block ── */}
         <View style={styles.profileBlock}>
           {/* Avatar */}
           <View style={styles.avatarArea}>
             {profile.avatar_url ? (
-              <Image source={{ uri: profile.avatar_url }} style={styles.avatar} />
+              <Image source={{ uri: profile.avatar_url }} style={styles.avatar} cachePolicy="disk" />
             ) : (
               <View style={styles.avatarPlaceholder}>
                 <Text style={styles.avatarInitials}>{initials}</Text>
               </View>
             )}
-            {!profile.is_public && (
-              <View style={styles.lockBadge}>
-                <Feather name="lock" size={10} color={Theme.colors.background} />
-              </View>
-            )}
           </View>
-
-          <Text style={styles.displayName}>{displayName}</Text>
-          <Text style={styles.username}>@{profile.username}</Text>
 
           {profile.bio ? (
             <Text style={styles.bioText}>{profile.bio}</Text>
           ) : null}
 
-          {/* Stats card */}
+          {/* Stats card (collapsible) */}
           <LinearGradient
             colors={['#F9C74F', '#F77FAD']}
             start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
             style={styles.statsCard}
           >
-            <View style={styles.statsGrid}>
-              <View style={styles.stat}>
-                <Text style={styles.statNum}>{posts.length}</Text>
-                <Text style={styles.statLabel}>outfits</Text>
-              </View>
-              <View style={styles.stat}>
-                <Text style={styles.statNum}>{communityCount}</Text>
-                <Text style={styles.statLabel}>communities</Text>
-              </View>
-              <View style={styles.stat}>
-                <Text style={styles.statNum}>{profile.followers_count ?? 0}</Text>
-                <Text style={styles.statLabel}>followers</Text>
-              </View>
-              <View style={styles.stat}>
-                <Text style={styles.statNum}>{profile.following_count ?? 0}</Text>
-                <Text style={styles.statLabel}>following</Text>
-              </View>
-            </View>
-
-            {(profile.style_tags?.length ?? 0) > 0 && (
-              <>
-                <View style={styles.statsTagDivider} />
-                <Text style={styles.statsTagHeader}>my style</Text>
-                <View style={styles.tagsRow}>
-                  {profile.style_tags!.map(tag => (
-                    <View key={tag} style={styles.tagChip}>
-                      <Text style={styles.tagChipText}>{tag}</Text>
-                    </View>
-                  ))}
-                </View>
-              </>
+            {!statsOpen && (
+              <TouchableOpacity style={styles.statsCardHeader} onPress={() => setStatsOpen(true)} activeOpacity={0.8}>
+                <Text style={styles.statsCardTitle}>
+                  {posts.length} outfits · {communityCount} communities
+                </Text>
+                <Feather name="chevron-down" size={14} color="rgba(0,0,0,0.5)" />
+              </TouchableOpacity>
             )}
-          </LinearGradient>
 
-          {/* Follow / Unfollow / Requested */}
-          {!isOwnProfile && session && (
-            <TouchableOpacity onPress={handleFollowToggle} activeOpacity={0.85} style={styles.followBtnWrap}>
-              {followStatus === 'none' ? (
-                <LinearGradient
-                  colors={['#F9C74F', '#F77FAD']}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  style={styles.followBtn}
-                >
-                  <Text style={styles.followBtnText}>follow</Text>
-                </LinearGradient>
-              ) : (
-                <View style={[styles.followBtn, followStatus === 'pending' ? styles.followBtnPending : styles.followBtnActive]}>
-                  <Text style={styles.followBtnTextMuted}>
-                    {followStatus === 'following' ? 'following' : 'requested'}
-                  </Text>
+            {statsOpen && (
+              <>
+                <TouchableOpacity style={styles.statsCollapseHint} onPress={() => setStatsOpen(false)} activeOpacity={0.7}>
+                  <Feather name="chevron-up" size={14} color="rgba(0,0,0,0.35)" />
+                </TouchableOpacity>
+                <View style={styles.statsGrid}>
+                  <TouchableOpacity style={styles.stat} onPress={() => setActiveTab('journal')} activeOpacity={0.7}>
+                    <Text style={styles.statNum}>{posts.length}</Text>
+                    <Text style={styles.statLabel}>outfits</Text>
+                  </TouchableOpacity>
+                  <View style={styles.stat}>
+                    <Text style={styles.statNum}>{communityCount}</Text>
+                    <Text style={styles.statLabel}>communities</Text>
+                  </View>
+                  <TouchableOpacity style={styles.stat} onPress={() => openPopup('followers')} activeOpacity={0.7}>
+                    <Text style={styles.statNum}>{profile.followers_count ?? 0}</Text>
+                    <Text style={styles.statLabel}>followers</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.stat} onPress={() => openPopup('following')} activeOpacity={0.7}>
+                    <Text style={styles.statNum}>{profile.following_count ?? 0}</Text>
+                    <Text style={styles.statLabel}>following</Text>
+                  </TouchableOpacity>
                 </View>
+
+                  {(profile.style_tags?.length ?? 0) > 0 && (
+                    <>
+                      <View style={styles.statsTagDivider} />
+                      <Text style={styles.statsTagHeader}>my style</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagsScroll} contentContainerStyle={styles.tagsScrollContent}>
+                        {profile.style_tags!.map(tag => (
+                          <View key={tag} style={styles.tagChip}>
+                            <Text style={styles.tagChipText}>{tag}</Text>
+                          </View>
+                        ))}
+                      </ScrollView>
+                    </>
+                  )}
+                </>
               )}
-            </TouchableOpacity>
-          )}
+          </LinearGradient>
 
         </View>
 
@@ -349,7 +409,54 @@ export default function UserProfileScreen() {
         )}
 
         <View style={{ height: 48 }} />
-      </ScrollView>
+      </Animated.ScrollView>
+
+      {/* Followers / Following popup */}
+      <Modal visible={popupType !== null} animationType="slide" presentationStyle="pageSheet">
+        <SafeAreaView style={styles.safe}>
+          <View style={styles.popupHeader}>
+            <View style={{ width: 40 }} />
+            <Text style={styles.popupTitle}>{popupType ?? ''}</Text>
+            <TouchableOpacity onPress={() => setPopupType(null)} hitSlop={12}>
+              <Text style={styles.popupClose}>done</Text>
+            </TouchableOpacity>
+          </View>
+          {popupLoading ? (
+            <View style={styles.popupCenter}>
+              <ActivityIndicator color={Theme.colors.brandWarm} />
+            </View>
+          ) : (
+            <ScrollView contentContainerStyle={styles.popupList}>
+              {popupProfiles.length === 0 ? (
+                <Text style={styles.popupEmpty}>no {popupType} yet</Text>
+              ) : popupProfiles.map(p => (
+                <TouchableOpacity
+                  key={p.id}
+                  style={styles.popupRow}
+                  onPress={() => {
+                    setPopupType(null);
+                    if (p.id === userId) return;
+                    router.push({ pathname: '/profile/[userId]' as any, params: { userId: p.id } });
+                  }}
+                  activeOpacity={0.7}
+                >
+                  {p.avatar_url ? (
+                    <Image source={{ uri: p.avatar_url }} style={styles.popupAvatar} cachePolicy="disk" />
+                  ) : (
+                    <View style={styles.popupAvatarPlaceholder}>
+                      <Text style={styles.popupAvatarInitial}>{(p.display_name ?? p.username ?? '?')[0].toUpperCase()}</Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.popupName}>{p.display_name ?? p.username}</Text>
+                    <Text style={styles.popupSub}>@{p.username}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -360,14 +467,29 @@ const styles = StyleSheet.create({
   notFoundText: { fontSize: Theme.font.sm, color: Theme.colors.secondary },
 
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop: 8,
+    paddingBottom: 6,
   },
+  headerLeft: { position: 'absolute', left: 16, top: 8 },
+  headerRight: { position: 'absolute', right: 16, top: 10 },
   backText: { fontSize: Theme.font.base, color: Theme.colors.primary, fontWeight: '600' },
-  headerSpacer: { width: 60 },
+  headerCenter: { alignItems: 'center' },
+  headerTitle: {
+    fontFamily: 'Caprasimo_400Regular',
+    color: Theme.colors.primary, letterSpacing: -0.3,
+  },
+  headerUsername: { color: Theme.colors.secondary, marginTop: 1 },
+  headerFollowBtn: {
+    paddingHorizontal: 16, paddingVertical: 7,
+    borderRadius: 100, alignItems: 'center',
+  },
+  headerFollowBtnMuted: {
+    backgroundColor: Theme.colors.surface,
+    borderWidth: 1.5, borderColor: Theme.colors.border,
+  },
+  headerFollowText: { fontSize: Theme.font.xs, fontWeight: '800', color: '#0B0B0B' },
+  headerFollowTextMuted: { fontSize: Theme.font.xs, fontWeight: '700', color: Theme.colors.secondary },
 
   profileBlock: {
     alignItems: 'center',
@@ -376,7 +498,7 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
 
-  avatarArea: { marginBottom: 14, position: 'relative' },
+  avatarArea: { marginBottom: 10 },
   avatar: { width: 88, height: 88, borderRadius: 44 },
   avatarPlaceholder: {
     width: 88, height: 88, borderRadius: 44,
@@ -385,62 +507,45 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   avatarInitials: { fontSize: 32, fontWeight: '700', color: Theme.colors.primary },
-  lockBadge: {
-    position: 'absolute', bottom: 0, right: 0,
-    width: 22, height: 22, borderRadius: 11,
-    backgroundColor: Theme.colors.secondary,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: Theme.colors.background,
-  },
 
-  displayName: {
-    fontSize: Theme.font.xl, fontWeight: '800',
-    color: Theme.colors.primary, letterSpacing: -0.5, textAlign: 'center',
-  },
-  username: {
-    fontSize: Theme.font.sm, color: Theme.colors.secondary,
-    marginTop: 2, marginBottom: 12,
-  },
 
   statsCard: {
     width: '100%', borderRadius: Theme.radius.lg,
-    marginTop: 20, marginBottom: 8, padding: 4,
+    marginTop: 14, marginBottom: 14, padding: 4, overflow: 'hidden',
   },
-  statsTagDivider: { height: 1, backgroundColor: 'rgba(0,0,0,0.12)', marginHorizontal: 4, marginVertical: 8 },
+  statsCardHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 10, paddingHorizontal: 12, gap: 6,
+  },
+  statsCardTitle: {
+    fontSize: Theme.font.xs, fontWeight: '700', color: 'rgba(0,0,0,0.5)',
+    textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  statsTagDivider: { height: 1, backgroundColor: 'rgba(0,0,0,0.08)', marginHorizontal: 4, marginTop: 8, marginBottom: 14 },
   statsTagHeader: {
     fontSize: Theme.font.xs, fontWeight: '800', color: Theme.colors.primary,
     textTransform: 'uppercase', letterSpacing: 0.8, opacity: 0.6,
-    paddingHorizontal: 12, marginBottom: 6,
+    paddingHorizontal: 12, marginBottom: 6, textAlign: 'center',
   },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap' },
   stat: { width: '50%', alignItems: 'center', paddingVertical: 16, gap: 3 },
   statNum: { fontSize: 22, fontWeight: '800', color: Theme.colors.primary },
   statLabel: { fontSize: Theme.font.xs, color: Theme.colors.primary, textTransform: 'uppercase', letterSpacing: 0.5, opacity: 0.6 },
 
-  bioText: { fontSize: Theme.font.sm, color: Theme.colors.primary, lineHeight: 20, marginBottom: 8, textAlign: 'center' },
-  tagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 12, paddingBottom: 8 },
+  bioText: {
+    fontSize: Theme.font.base, fontWeight: '500', color: Theme.colors.primary,
+    lineHeight: 21, marginTop: 6, textAlign: 'center',
+  },
+  tagsScroll: { paddingHorizontal: 8 },
+  tagsScrollContent: { flexDirection: 'row', gap: 8, alignItems: 'center', paddingVertical: 8, paddingRight: 12 },
   tagChip: {
     borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4,
-    backgroundColor: Theme.colors.background,
-    borderWidth: 1, borderColor: Theme.colors.border,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)',
   },
-  tagChipText: { fontSize: Theme.font.xs, color: Theme.colors.primary },
+  tagChipText: { fontSize: Theme.font.xs, fontWeight: '600', color: Theme.colors.primary },
 
-  followBtnWrap: { width: '100%', marginBottom: 8 },
-  followBtn: {
-    width: '100%', borderRadius: Theme.radius.md,
-    paddingVertical: 18, alignItems: 'center',
-  },
-  followBtnActive: {
-    backgroundColor: Theme.colors.surface,
-    borderWidth: 1.5, borderColor: Theme.colors.border,
-  },
-  followBtnPending: {
-    backgroundColor: Theme.colors.surface,
-    borderWidth: 1.5, borderColor: Theme.colors.secondary,
-  },
-  followBtnText: { fontSize: Theme.font.base, fontWeight: '800', color: '#0B0B0B', letterSpacing: -0.2 },
-  followBtnTextMuted: { fontSize: Theme.font.base, fontWeight: '700', color: Theme.colors.secondary },
+  statsCollapseHint: { alignItems: 'center', paddingTop: 6 },
 
   // Tabs
   tabRow: {
@@ -479,4 +584,32 @@ const styles = StyleSheet.create({
     fontSize: Theme.font.sm, color: Theme.colors.secondary,
     textAlign: 'center', lineHeight: 20,
   },
+
+  // Popup modal
+  popupHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Theme.colors.border,
+  },
+  popupTitle: {
+    fontFamily: 'Caprasimo_400Regular', fontSize: 20,
+    color: Theme.colors.primary, textAlign: 'center', flex: 1,
+  },
+  popupClose: { fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.accent, width: 40, textAlign: 'right' },
+  popupCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  popupList: { padding: 16 },
+  popupEmpty: { fontSize: Theme.font.sm, color: Theme.colors.secondary, textAlign: 'center', marginTop: 32 },
+  popupRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Theme.colors.border,
+  },
+  popupAvatar: { width: 40, height: 40, borderRadius: 20 },
+  popupAvatarPlaceholder: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: Theme.colors.surface, borderWidth: 1, borderColor: Theme.colors.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  popupAvatarInitial: { fontSize: Theme.font.sm, fontWeight: '700', color: Theme.colors.primary },
+  popupName: { fontSize: Theme.font.sm, fontWeight: '600', color: Theme.colors.primary },
+  popupSub: { fontSize: Theme.font.xs, color: Theme.colors.secondary, marginTop: 1 },
 });

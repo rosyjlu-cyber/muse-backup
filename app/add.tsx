@@ -284,11 +284,14 @@ export default function AddScreen() {
     originX = Math.max(0, Math.min(imgW - cropW, originX));
     originY = Math.max(0, Math.min(imgH - cropH, originY));
 
-    const ref = await ImageManipulator
+    const MAX_WIDTH = 1200;
+    const needsResize = cropW > MAX_WIDTH;
+    const manipulator = ImageManipulator
       .manipulate(uri)
-      .crop({ originX, originY, width: cropW, height: cropH })
-      .renderAsync();
-    const result = await ref.saveAsync({ compress: 0.85, format: SaveFormat.JPEG });
+      .crop({ originX, originY, width: cropW, height: cropH });
+    if (needsResize) manipulator.resize({ width: MAX_WIDTH });
+    const ref = await manipulator.renderAsync();
+    const result = await ref.saveAsync({ compress: 0.8, format: SaveFormat.JPEG });
     setPhotoUri(result.uri);
   };
 
@@ -394,6 +397,7 @@ export default function AddScreen() {
           <View style={[styles.photoContainer, { height: CARD_H }]}>
             <Image
               source={{ uri: photoUri! }}
+                cachePolicy="disk"
               style={{ width: CARD_W, height: CARD_H }}
               resizeMode="cover"
             />
@@ -471,7 +475,7 @@ export default function AddScreen() {
               {selectedItems.map(item => (
                 <View key={item.id} style={styles.itemCell}>
                   {item.generated_image_url
-                    ? <Image source={{ uri: item.generated_image_url }} style={styles.itemCellImg} resizeMode="cover" />
+                    ? <Image source={{ uri: item.generated_image_url }} style={styles.itemCellImg} resizeMode="cover" cachePolicy="disk" />
                     : <View style={[styles.itemCellImg, styles.itemCellPlaceholder]}>
                         <Text style={{ fontSize: 22 }}>{categoryEmoji(item.category)}</Text>
                       </View>
@@ -633,7 +637,7 @@ export default function AddScreen() {
                     activeOpacity={0.8}
                   >
                     {item.generated_image_url ? (
-                      <Image source={{ uri: item.generated_image_url }} style={styles.itemPickerImg} resizeMode="cover" />
+                      <Image source={{ uri: item.generated_image_url }} style={styles.itemPickerImg} resizeMode="cover" cachePolicy="disk" />
                     ) : (
                       <View style={[styles.itemPickerImg, styles.itemPickerPlaceholder]}>
                         <Text style={styles.itemPickerEmoji}>{categoryEmoji(item.category)}</Text>
